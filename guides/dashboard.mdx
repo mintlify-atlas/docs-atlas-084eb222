@@ -1,7 +1,7 @@
 ---
-title: "Using the Piumy Web Dashboard"
+title: "Manage Your Piumy Switchboard via the Web Dashboard"
 sidebarTitle: "Dashboard"
-description: "Piumy serves a lightweight web dashboard on LAN port 80. Manage WhatsApp linking, per-chat rules, rate limits, router config, and view battery charts from any browser."
+description: "Piumy's built-in web dashboard runs on port 80. Manage WhatsApp linking, per-chat rules, rate limits, router config, and battery charts from a LAN browser."
 ---
 
 The Piumy dashboard is served by the same Go binary as the switchboard core, on port 80 by default (configurable via `PIMYWA_DASH_ADDR`). It is designed for LAN-only access and requires a login. No build step, no external CDN — the entire UI is a few kilobytes of HTML and JS embedded directly in the binary.
@@ -14,13 +14,13 @@ The Piumy dashboard is served by the same Go binary as the switchboard core, on 
 
 Open your browser and navigate to:
 
-```
+```text
 http://piumy.local
 ```
 
 If mDNS is not resolving on your network, use the Pi's IP address directly on port 80:
 
-```
+```text
 http://<pi-ip>
 ```
 
@@ -77,7 +77,7 @@ If you lose the dashboard password, you have two options:
 
 **Option 1 — use the MCP `reset_dashboard_password` tool** (requires MCP auth to be configured):
 
-```
+```text
 reset_dashboard_password
 ```
 
@@ -98,10 +98,10 @@ A password reset via `reset_dashboard_password` writes a new bcrypt hash into th
 
 ## Enable / disable the dashboard
 
-Set `PIMYWA_DASH` to `off` to disable the dashboard entirely:
+Set `PIMYWA_DASH` to a falsy value to disable the dashboard entirely:
 
 ```bash
 PIMYWA_DASH=off
 ```
 
-The default is `on`. When disabled, the binary skips starting the dashboard HTTP listener. The REST API (port 8080) and MCP server (port 8081) are unaffected.
+Accepted truthy values: `on`, `yes`, `true`, `1`. Anything else (including `off`, `no`, `false`, `0`) disables it. The default is enabled. When disabled, the binary skips starting the dashboard HTTP listener. The REST API (port 8080) and MCP server (port 8081) are unaffected.

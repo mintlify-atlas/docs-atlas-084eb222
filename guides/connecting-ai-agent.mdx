@@ -1,7 +1,7 @@
 ---
-title: "Connect an AI Agent to Piumy over MCP"
+title: "Connect an AI Agent to the Piumy Switchboard over MCP"
 sidebarTitle: "Connect AI Agent"
-description: "Configure Claude Code, OpenCode, or any MCP-compatible agent to read WhatsApp messages from Piumy and send replies through the switchboard's anti-ban governor."
+description: "Configure Claude Code, OpenCode, or any MCP client to read WhatsApp messages from Piumy and send replies through the switchboard's anti-ban governor."
 ---
 
 Piumy exposes an MCP (Model Context Protocol) server on port **8081**. Any MCP-compatible client — Claude Code, OpenCode, or a custom agent — can connect, read the queue, and send replies. The agent never runs on the board itself; it connects from your PC or any machine that has the RAM to run an LLM. The switchboard handles all the WhatsApp protocol, anti-ban pacing, and persistent storage.

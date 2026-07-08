@@ -1,7 +1,7 @@
 ---
-title: "status.json Data Contract: Core to Display Adapter"
+title: "status.json Contract: Piumy Core to Display Adapter"
 sidebarTitle: "status.json Contract"
-description: "The status.json file is the data contract between the Piumy core and the display adapter. The core is the only writer; the display adapter reads it to render the kaomoji face."
+description: "status.json is the data contract between the Piumy core and the display adapter. Fields cover mood, queue, battery, Wi-Fi, agents, and system metrics."
 ---
 
 `status.json` is the seam between the Go core and the Python display adapter. The core writes it **atomically** (write to a temp file, then rename) on every event and on a regular heartbeat. The display adapter polls it by `mtime` and re-renders the face whenever the file has changed. This design means the two processes never share memory, never block each other, and survive restarts independently.

@@ -1,7 +1,7 @@
 ---
-title: "Back Up and Restore the WhatsApp Session"
+title: "Encrypted Backup and Restore for the WhatsApp Session"
 sidebarTitle: "Session Backup"
-description: "Piumy can encrypt and back up the WhatsApp session database. Restore from backup with the pimywa restore-session CLI command when the session is corrupt or lost."
+description: "Piumy encrypts periodic backups of the WhatsApp session database. Use the pimywa restore-session CLI command to recover a lost or corrupted session."
 ---
 
 The WhatsApp session database (`PIMYWA_SESSION_DB`) contains your linked device credentials. If it is lost or corrupted, you must re-link by scanning the QR code again. Piumy can encrypt periodic backups of this file to protect against SD card corruption — the most common failure mode on always-on ARM boards.

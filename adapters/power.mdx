@@ -1,7 +1,7 @@
 ---
-title: "Power Adapter: CW2015 Battery Gauge"
+title: "Power Adapter: CW2015 I2C Battery Gauge for Piumy"
 sidebarTitle: "Power Adapter"
-description: "The Piumy power adapter reads the CW2015 battery gauge over I2C, computes a linearized level and adaptive time-remaining, and writes battery.json for the core to merge into status.json."
+description: "The Piumy power adapter polls the CW2015 over I2C, maps raw cell voltage to a LiPo curve, and writes battery.json with level, voltage, and time-remaining."
 ---
 
 The power adapter (`adapters/power/service.py`) is a Python service that reads the CW2015 fuel gauge over I2C and writes `battery.json` — a sidecar the core merges into `status.json` on its heartbeat. It runs as the `pimywa-power` systemd service on the Pi. The service never writes to `status.json` directly; it owns only its own small sidecar file, keeping the single-writer architecture intact.
@@ -48,7 +48,7 @@ The power adapter is the ONLY writer of `battery.json`. The core is the ONLY wri
   <Step title="Enable I2C on the Pi">
     Add to `/boot/firmware/config.txt` and reboot:
 
-    ```
+    ```ini
     dtparam=i2c_arm=on
     ```
   </Step>
@@ -104,11 +104,12 @@ All knobs are env-driven. Set them in `/opt/pimywa/.env` or export them directly
 | Variable | Default | Description |
 |---|---|---|
 | `PIMYWA_BATTERY_FILE` | `/run/pimywa/battery.json` | Path the adapter writes battery data to |
-| `PIMYWA_BATTERY_LOG_FILE` | `/opt/pimywa/data/battery_log.csv` | Per-minute discharge log |
+| `PIMYWA_BATTERY_LOG_FILE` | `/opt/pimywa/data/battery_log.csv` | Per-minute discharge trace log |
 | `PIMYWA_POWER_BACKEND` | `none` | Backend: `cw2015-i2c` \| `none` |
-| `PIMYWA_I2C_BUS` | `1` | I2C bus number for CW2015 |
-| `PIMYWA_I2C_ADDR` | `0x62` | I2C address for CW2015 |
-| `PIMYWA_POLL_INTERVAL` | `30` | Seconds between readings |
+| `PIMYWA_POWER_I2C_BUS` | `1` | I2C bus number for CW2015 |
+| `PIMYWA_POWER_I2C_ADDR` | `0x62` | I2C address for CW2015 |
+| `PIMYWA_POWER_INTERVAL` | `30` | Seconds between readings |
+| `PIMYWA_LOG_LEVEL` | `INFO` | Python logging level (`DEBUG` \| `INFO` \| `WARNING` \| `ERROR`) |
 
 ## Invalid readings
 

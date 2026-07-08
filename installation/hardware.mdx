@@ -1,7 +1,7 @@
 ---
-title: "Hardware Setup and Wiring for Piumy"
+title: "Piumy Hardware Setup: Wiring, GPIO Pins, and Boards"
 sidebarTitle: "Hardware"
-description: "Reference boards, peripheral wiring, GPIO pin assignments, and instructions for porting Piumy to a new ARM64 board. Uses only generic Linux interfaces — no vendor-locked libraries."
+description: "Reference boards, peripheral wiring, GPIO pin assignments, and porting guide for Piumy. Generic Linux interfaces only — no vendor-locked libraries."
 ---
 
 Piumy touches hardware exclusively through generic Linux kernel interfaces: `spidev` (`/dev/spidev*`) for the e-paper display, `libgpiod` (`/dev/gpiochip*`) for GPIO lines (panel reset, data/command, busy, and physical buttons), and `i2c-dev` (`/dev/i2c-*`) for the CW2015 battery gauge. There are no vendor-locked HAT libraries and no hardcoded pin numbers — every bus address, chip select, and pin assignment is a config value in the env file. If something cannot be configured, that is a portability bug.

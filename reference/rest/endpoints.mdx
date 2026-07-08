@@ -1,7 +1,7 @@
 ---
-title: "REST API Endpoints for Piumy"
+title: "Piumy REST API Endpoints: Complete Reference Guide"
 sidebarTitle: "Endpoints"
-description: "Full reference for every Piumy REST endpoint: method, path, authentication, request/response shapes, and curl examples."
+description: "Full reference for every Piumy REST endpoint: method, path, auth, request body fields, response shapes, and ready-to-run curl examples."
 ---
 
 Complete reference for every REST endpoint exposed by the Piumy core. All `/api/*` paths require the `X-API-Key` header (or `?key=` query param) when `PIMYWA_API_KEY` is set. The `/healthz` endpoint has no authentication requirement.
@@ -20,7 +20,7 @@ Simple liveness check. Returns the plain text string `ok` with a `200` status. U
 curl http://piumy.local:8080/healthz
 ```
 
-```
+```text
 ok
 ```
 
@@ -342,7 +342,7 @@ curl "http://piumy.local:8080/api/battery/log?limit=100" \
 
 ## GET /api/events
 
-Opens a Server-Sent Events (SSE) stream. The server emits a `data:` event on every inbound message. A keep-alive comment (`: keep-alive`) is sent every 20 seconds so the connection stays alive through proxies and load balancers.
+Opens a Server-Sent Events (SSE) stream. The server emits a `data:` event on every inbound message nudge. A keep-alive comment (`: keep-alive`) is sent every 20 seconds so the connection stays alive through proxies and load balancers.
 
 Use this for real-time dashboard updates without polling `GET /api/status`.
 
@@ -354,7 +354,7 @@ Use this for real-time dashboard updates without polling `GET /api/status`.
 curl -N "http://piumy.local:8080/api/events?key=<key>"
 ```
 
-```
+```text
 : keep-alive
 
 data: {"type":"message","chat":"56999999999@s.whatsapp.net"}
@@ -367,6 +367,32 @@ data: {"type":"message","chat":"56999999999@s.whatsapp.net"}
   cannot be set. Pass the key via `?key=` instead. On a trusted LAN this is
   acceptable; be aware the key may appear in proxy access logs.
 </Note>
+
+---
+
+## GET /api/qr.svg
+
+Returns the current WhatsApp linking QR code as an SVG image. Returns `404` when no QR data is available (the gateway is not in QR/linking mode).
+
+**Auth:** Required
+
+**Response content-type:** `image/svg+xml`
+
+```bash
+curl http://piumy.local:8080/api/qr.svg \
+  -H "X-API-Key: <key>" \
+  -o qr.svg
+```
+
+```http
+HTTP/1.1 200 OK
+Content-Type: image/svg+xml
+Cache-Control: no-cache, no-store
+
+<svg ...>...</svg>
+```
+
+Returns `{"error": "no QR data"}` with status `404` when the gateway is not in linking mode.
 
 ---
 
@@ -485,6 +511,83 @@ curl -X POST http://piumy.local:8080/api/killswitch \
 
 ---
 
+## GET /api/gateway
+
+Returns the current WhatsApp gateway running state and connection information.
+
+**Auth:** Required
+
+```bash
+curl http://piumy.local:8080/api/gateway \
+  -H "X-API-Key: <key>"
+```
+
+```json
+{
+  "running": true,
+  "wa_connected": true,
+  "mood": "few",
+  "own_jid": "56999999999@s.whatsapp.net"
+}
+```
+
+---
+
+## POST /api/gateway
+
+Starts or stops the WhatsApp gateway connection loop.
+
+- `"link"` → calls `Start()`: launches the connect/QR loop; arms the 3-minute QR exposure cap.
+- `"disconnect"` → calls `Stop()`: cancels the loop and resets state to idle.
+
+Returns `503` if the gateway is not available.
+
+**Auth:** Required
+
+<ParamField body="Action" type="string" required>
+  `"link"` to start the gateway or `"disconnect"` to stop it.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/gateway \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"Action": "link"}'
+```
+
+```json
+{
+  "ok": true,
+  "running": true,
+  "wa_connected": false,
+  "mood": "qr",
+  "own_jid": ""
+}
+```
+
+---
+
+## POST /api/reconnect
+
+Clears the reconnect-paused state and restarts the gateway connection loop. Use this when `reconnect_paused` is `true` in the status snapshot (the anti-ban governor paused reconnection after too many consecutive failures).
+
+Returns `503` if the gateway is not available.
+
+**Auth:** Required
+
+**Body:** None
+
+```bash
+curl -X POST http://piumy.local:8080/api/reconnect \
+  -H "X-API-Key: <key>"
+```
+
+```json
+{"status": "ok"}
+```
+
+---
+
 ## GET /api/backup
 
 Returns session backup status: whether backups are enabled, how many are retained, and the most recent backup's metadata.
@@ -538,6 +641,77 @@ curl -X POST http://piumy.local:8080/api/backup \
 
 ---
 
+## GET /api/mcp-guard
+
+Returns the MCP anti-flood limiter status: the effective configuration plus every currently-tracked MCP client (session ID, throttle/block state). Session IDs are opaque per-connection identifiers — never the auth token.
+
+Returns `503` if the guard is not available.
+
+**Auth:** Required
+
+```bash
+curl http://piumy.local:8080/api/mcp-guard \
+  -H "X-API-Key: <key>"
+```
+
+```json
+{
+  "rate_per_min": 120,
+  "emit_rate_per_min": 20,
+  "block_threshold": 5,
+  "block_cooldown_sec": 300,
+  "clients": []
+}
+```
+
+---
+
+## POST /api/mcp-guard
+
+Updates the MCP anti-flood thresholds at runtime. Changes take effect immediately. The response echoes the effective post-clamp values.
+
+**Guardrails:**
+- `rate_per_min`: floored at 10, ceilinged at 600.
+- `emit_rate_per_min`: floored at 2, ceilinged at 100.
+- `block_threshold`: floored at 1, ceilinged at 20.
+- `block_cooldown_sec`: floored at 30 seconds, ceilinged at 3600 seconds (1 hour).
+
+Returns `503` if the guard is not available.
+
+**Auth:** Required
+
+<ParamField body="rate_per_min" type="integer">
+  Maximum general tool calls per minute per MCP session.
+</ParamField>
+
+<ParamField body="emit_rate_per_min" type="integer">
+  Maximum emit tool calls (send_message, escalate) per minute per session.
+</ParamField>
+
+<ParamField body="block_threshold" type="integer">
+  Consecutive throttled calls that trip the circuit breaker.
+</ParamField>
+
+<ParamField body="block_cooldown_sec" type="number">
+  How long (in seconds) a tripped session remains blocked.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/mcp-guard \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rate_per_min": 60,
+    "emit_rate_per_min": 10,
+    "block_threshold": 3,
+    "block_cooldown_sec": 120
+  }'
+```
+
+Returns the same shape as `GET /api/mcp-guard` with the effective post-clamp values.
+
+---
+
 ## GET /api/router
 
 Returns the current in-memory router configuration: the whitelist, `allow_all` flag, `default_mode`, and routes. See [router.json reference](/reference/router-json) for the full field documentation.
@@ -572,3 +746,301 @@ curl http://piumy.local:8080/api/router \
   ]
 }
 ```
+
+---
+
+## POST /api/router/whitelist
+
+Adds or removes a JID from the in-memory whitelist and persists the change to `router.json` immediately. The gateway sees the change at once — no restart required.
+
+Returns `503` if the router manager is not available.
+
+**Auth:** Required
+
+<ParamField body="jid" type="string" required>
+  The JID to add or remove (e.g. `56999999999@s.whatsapp.net`).
+</ParamField>
+
+<ParamField body="action" type="string" required>
+  `"add"` or `"remove"`. The `add` action is idempotent — adding an already-present JID is a no-op.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/router/whitelist \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"jid": "56999999999@s.whatsapp.net", "action": "add"}'
+```
+
+Returns the updated router config snapshot (same shape as `GET /api/router`).
+
+---
+
+## POST /api/router/allowall
+
+Enables or disables the `allow_all` flag. When `true`, the whitelist check is skipped entirely — any number can send messages through the gateway. The change is persisted to `router.json` immediately.
+
+<Warning>
+  Setting `allow_all` to `true` is risky — any phone number can reach your
+  switchboard. Use only for development and testing.
+</Warning>
+
+Returns `503` if the router manager is not available.
+
+**Auth:** Required
+
+<ParamField body="On" type="boolean" required>
+  `true` to allow all inbound senders; `false` to re-enable the whitelist.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/router/allowall \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"On": false}'
+```
+
+Returns the updated router config snapshot (same shape as `GET /api/router`).
+
+---
+
+## GET /api/rules
+
+Returns the current global and by-type rules tiers. A chat with no per-chat rules inherits from the by-type tier (based on whether it is a group or individual chat); if that is also empty, the global default applies.
+
+**Auth:** Required
+
+```bash
+curl http://piumy.local:8080/api/rules \
+  -H "X-API-Key: <key>"
+```
+
+```json
+{
+  "individual": "Reply concisely and helpfully.",
+  "group": "Only respond when directly addressed.",
+  "default": ""
+}
+```
+
+---
+
+## POST /api/rules/type
+
+Sets the by-type rules tier for `individual` or `group` chats. Applies to all chats of that type that have no per-chat rules of their own.
+
+**Auth:** Required
+
+<ParamField body="type" type="string" required>
+  `"individual"` or `"group"`.
+</ParamField>
+
+<ParamField body="rules" type="string" required>
+  The rules text to set. Pass an empty string to clear.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/rules/type \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"type": "individual", "rules": "Reply concisely and helpfully."}'
+```
+
+```json
+{"status": "ok"}
+```
+
+---
+
+## POST /api/rules/default
+
+Sets the global default rules — the catch-all for chats that have neither per-chat rules nor matching by-type rules.
+
+**Auth:** Required
+
+<ParamField body="rules" type="string" required>
+  The default rules text. Pass an empty string to clear.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/rules/default \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"rules": "Be polite and brief."}'
+```
+
+```json
+{"status": "ok"}
+```
+
+---
+
+## POST /api/chats/boss
+
+Marks or unmarks a chat as the trusted owner (`is_boss`). The owner chat receives privileged commands. This endpoint is deliberately not reachable from MCP — only the REST API (dashboard/owner) may set the boss flag.
+
+**Auth:** Required
+
+<ParamField body="jid" type="string" required>
+  The chat's JID.
+</ParamField>
+
+<ParamField body="boss" type="boolean" required>
+  `true` to grant owner trust; `false` to revoke it.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/chats/boss \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"jid": "56999999999@s.whatsapp.net", "boss": true}'
+```
+
+```json
+{"status": "ok"}
+```
+
+---
+
+## POST /api/chats/rules
+
+Sets per-chat behavior rules — instructions for how the AI should respond to this specific chat. Overrides the by-type and default rules tiers for this chat. This endpoint is deliberately not reachable from MCP — an agent must never rewrite the rules it is judged against.
+
+**Auth:** Required
+
+<ParamField body="jid" type="string" required>
+  The chat's JID.
+</ParamField>
+
+<ParamField body="rules" type="string" required>
+  The rules text. Pass an empty string to clear per-chat rules (the chat then inherits from the by-type or default tier).
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/chats/rules \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"jid": "56999999999@s.whatsapp.net", "rules": "This is a VIP customer. Always be warm and proactive."}'
+```
+
+```json
+{"status": "ok"}
+```
+
+---
+
+## POST /api/chats/description
+
+Sets a chat's description — a note about the chat (for a 1-1 contact) or the WhatsApp group topic (for a group). The description is visible to the AI via MCP context.
+
+**Auth:** Required
+
+<ParamField body="jid" type="string" required>
+  The chat's JID.
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  The description text. Pass an empty string to clear.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/chats/description \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"jid": "56999999999@s.whatsapp.net", "description": "VIP customer, orders frequently."}'
+```
+
+```json
+{"status": "ok"}
+```
+
+---
+
+## POST /api/chats/confirmation
+
+Sets a chat's confirmation baseline and default confirmer. Determines whether auto-reply drafts for this chat require owner approval before sending.
+
+This endpoint is deliberately not reachable from MCP — an agent must not be able to change its own confirmation baseline.
+
+**Auth:** Required
+
+<ParamField body="jid" type="string" required>
+  The chat's JID.
+</ParamField>
+
+<ParamField body="mode" type="string" required>
+  `"none"` (send drafts automatically) or `"required"` (hold drafts for owner approval).
+</ParamField>
+
+<ParamField body="confirmer" type="string">
+  Optional JID of the default confirmer (the contact who approves drafts). Leave empty to use the system default.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/chats/confirmation \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"jid": "56999999999@s.whatsapp.net", "mode": "required"}'
+```
+
+```json
+{"status": "ok"}
+```
+
+---
+
+## POST /api/drafts/approve
+
+Approves a pending auto-reply draft and moves it into the outbox for sending (with the normal anti-ban pacing). Optionally edits the draft text before approval.
+
+This endpoint is deliberately not reachable from MCP — only the owner approves drafts.
+
+**Auth:** Required
+
+<ParamField body="id" type="integer" required>
+  The draft ID (integer).
+</ParamField>
+
+<ParamField body="text" type="string">
+  Optional edited text. When provided, replaces the original draft text before sending.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/drafts/approve \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"id": 42, "text": "Sure, I will check on that right away!"}'
+```
+
+```json
+{"status": "ok"}
+```
+
+Returns `404` if the draft is not found or is no longer pending.
+
+---
+
+## POST /api/drafts/discard
+
+Marks a pending auto-reply draft as discarded — it will never be sent. The action is permanent.
+
+This endpoint is deliberately not reachable from MCP.
+
+**Auth:** Required
+
+<ParamField body="id" type="integer" required>
+  The draft ID (integer).
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/drafts/discard \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"id": 42}'
+```
+
+```json
+{"status": "ok"}
+```
+
+Returns `404` if the draft is not found or is no longer pending.

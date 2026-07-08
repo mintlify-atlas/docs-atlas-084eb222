@@ -74,7 +74,7 @@ The core is the **single writer** of `status.json`. It writes atomically (tmp fi
 | `ram` | RAM usage (%) from `/proc` |
 | `uptime` | Seconds since the core started |
 
-The path is configurable via `PIMYWA_STATUS` (default: `/tmp/pimywa-status.json`). Because it lives in tmpfs, every write is zero-SD-wear by design.
+The path is configurable via `PIMYWA_STATUS` (default: `status.json` in the working directory; set to `/run/pimywa/status.json` in the production systemd unit so it lives on tmpfs). Because the production path lives in tmpfs, every write is zero-SD-wear by design.
 
 ### MCP / HTTP (`:8081`) — core ↔ external agent
 
@@ -105,7 +105,7 @@ After each render, the display adapter writes the current kaomoji string to `fac
 | `:8080` | REST API | Optional `X-API-Key` header (`PIMYWA_API_KEY`) |
 | `:80` | Web dashboard | Login required (`PIMYWA_DASH_USER` / `PIMYWA_DASH_PASS`) |
 
-All ports are configurable via environment variables: `PIMYWA_MCP_ADDR`, `PIMYWA_DASH_ADDR` (for the REST API), and the dashboard address. All three are LAN-only by default. For remote access, a WireGuard tunnel is the recommended path.
+All ports are configurable via environment variables: `PIMYWA_MCP_ADDR` (MCP server), `PIMYWA_API_ADDR` (REST API), and `PIMYWA_DASH_ADDR` (dashboard). All three are LAN-only by default. For remote access, a WireGuard tunnel is the recommended path.
 
 ## The anti-ban golden rules
 
@@ -121,7 +121,7 @@ WhatsApp actively detects and bans accounts that behave like automation. Piumy's
 
 ## Full flow diagram
 
-```
+```text
 WhatsApp (dedicated number)
       │
       ▼

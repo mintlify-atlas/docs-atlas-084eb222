@@ -10,7 +10,7 @@ Piumy is a distributed, portable WhatsApp assistant for ARM64 boards. A tiny boa
 
 The architecture is intentionally simple. WhatsApp messages arrive at a dedicated number, flow into the Go switchboard, and are stored in SQLite. The switchboard never replies on its own — it waits for an agent to pull the queue via MCP and act. Meanwhile, a Python display adapter reads a `status.json` file and draws a pwnagotchi-style kaomoji face on the e-paper screen, reacting in real time to what's happening.
 
-```
+```text
 WhatsApp (dedicated number)
       │
       ▼

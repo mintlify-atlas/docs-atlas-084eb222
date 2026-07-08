@@ -30,8 +30,8 @@ This guide follows **Contract #001** — the zero-risk PC demo path. The Go core
     ```
 
     You should see output like:
-    ```
-    status.json written to /tmp/pimywa-status.json (mood=responding)
+    ```text
+    status.json written to status.json (mood=responding)
     ```
 
     <Tip>
@@ -84,8 +84,8 @@ This guide follows **Contract #001** — the zero-risk PC demo path. The Go core
     ```
 
     Output:
-    ```
-    seed OK at /tmp/pimywa.db
+    ```text
+    seed OK at pimywa.db
     ```
 
     You can then query the REST API (once `serve` is running in the next step) with `curl http://localhost:8080/api/chats` to see the demo data.
@@ -100,10 +100,10 @@ This guide follows **Contract #001** — the zero-risk PC demo path. The Go core
     ```
 
     You should see:
-    ```
+    ```text
     Piumy REST API on :8080
     Piumy dashboard on :80 (user=admin)
-    Piumy switchboard — MCP (streamable HTTP) on :8081 · db=/tmp/pimywa.db
+    Piumy switchboard — MCP (streamable HTTP) on :8081 · db=pimywa.db
     Piumy gateway: none (no WhatsApp connection; start via dashboard)
     ```
 

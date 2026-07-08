@@ -88,7 +88,7 @@ Queues a message to send over WhatsApp. The anti-ban governor dispatches it with
 Every call passes through a chain of checks, in order. All rejections return a clear error string — never a silent drop.
 
 <Warning>
-  **All six gates must pass** before a message is queued. A failure at any gate returns an error and the message is not enqueued.
+  **All eight gates must pass** before a message is queued. A failure at any gate returns an error and the message is not enqueued.
 
   1. **Muted check** — If `get_status` shows `muted: true`, `send_message` returns `"muted: message not sent"`. Stop — do not loop or retry. The mute is the owner's kill switch.
 
@@ -96,13 +96,15 @@ Every call passes through a chain of checks, in order. All rejections return a c
 
   3. **JID format check** — `to` must contain `@`. A bare number (e.g. `56999999999`) is rejected with a message telling you to copy the JID from `list_chats` / `get_queue` / `resolve_chat`.
 
-  4. **Claim check** — If another model holds an unexpired `claim_chat` lock on this chat, the call is rejected with who holds it and until when.
+  4. **Chat existence check** — The chat must exist in the store. If `GetChat` finds no record for the destination JID, the call is rejected with `"error: no rules on this chat"`.
 
-  5. **Effective rules check** — The chat must have effective rules (particular → type → global default). A chat with no rules at any tier is rejected with `"error: no rules on this chat"`. Rules are set by the owner only, never over MCP.
+  5. **Claim check** — If another model holds an unexpired `claim_chat` lock on this chat, the call is rejected with who holds it and until when.
 
-  6. **Group status check** — If the destination is a WhatsApp group (`@g.us`) and its status is `"ignored"`, the call is rejected. The owner must explicitly un-ignore the group first.
+  6. **Effective rules check** — The chat must have effective rules (particular → type → global default). A chat with no rules at any tier is rejected with `"error: no rules on this chat"`. Rules are set by the owner only, never over MCP.
 
-  7. **Router whitelist check** — The JID must be in the router whitelist. Rejected with `"refusing to send: <jid> is not in the whitelist (anti-ban)"`.
+  7. **Group status check** — If the destination is a WhatsApp group (`@g.us`) and its status is `"ignored"`, the call is rejected. The owner must explicitly un-ignore the group first.
+
+  8. **Router whitelist check** — The JID must be in the router whitelist. Rejected with `"refusing to send: <jid> is not in the whitelist (anti-ban)"`.
 </Warning>
 
 ### Example tool call
@@ -121,7 +123,7 @@ Every call passes through a chain of checks, in order. All rejections return a c
 
 The typical sequence is:
 
-```
+```text
 get_decision_policy  →  (read policy, save policy_version)
 get_chat             →  (confirm rules are set, check claimed_by)
 send_message         →  (pass policy_version, model, full JID)

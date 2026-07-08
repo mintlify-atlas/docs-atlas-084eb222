@@ -48,7 +48,7 @@ The kill switch silences all outbound sends instantly while leaving the bot conn
 
 **Activating the mute**
 
-- Dashboard toggle: `POST /api/killswitch` with `{"muted": true}`.
+- Dashboard toggle: `POST /api/killswitch` with `{"on": true}`.
 - Physical kill switch: a maintained push-button wired to GPIO 6. This is the authoritative source — a physical press is always honored, and a dashboard toggle is overridden on the next GPIO read if the physical switch disagrees.
 
 **Behavior while muted**
@@ -73,8 +73,8 @@ The anti-flood guard is a separate layer that limits inbound tool calls from con
 |---|---|---|
 | `PIMYWA_MCPGUARD_RATE_PER_MIN` | 120 | Maximum tool calls per minute across all general tools |
 | `PIMYWA_MCPGUARD_EMIT_RATE_PER_MIN` | 20 | Separate, tighter limit for emit tools (`send_message`, `escalate`) |
-| `PIMYWA_MCPGUARD_BLOCK_THRESHOLD` | — | Consecutive throttled calls that trigger a full circuit-breaker block |
-| `PIMYWA_MCPGUARD_BLOCK_COOLDOWN` | — | Duration of a full block once the threshold is hit |
+| `PIMYWA_MCPGUARD_BLOCK_THRESHOLD` | 5 | Consecutive throttled calls that trigger a full circuit-breaker block |
+| `PIMYWA_MCPGUARD_BLOCK_COOLDOWN` | 5m | Duration of a full block once the threshold is hit |
 
 When a call is throttled, the tool returns an error immediately. When the circuit breaker fires, all tool calls from the offending agent are blocked for the cooldown duration. All four settings are editable at runtime via the dashboard.
 

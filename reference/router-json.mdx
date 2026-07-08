@@ -1,7 +1,7 @@
 ---
-title: "router.json: Whitelist and Routing Configuration"
+title: "router.json: Piumy Whitelist and Routing Configuration"
 sidebarTitle: "router.json"
-description: "The router.json file controls which phone numbers are whitelisted and how their messages are routed. Supports exact JID matches and wildcards, with mode and plugin overrides."
+description: "router.json controls which JIDs reach the switchboard and how they are routed. Supports exact matches and wildcard rules with mode and plugin overrides."
 ---
 
 `router.json` is the whitelist and routing table for Piumy. It controls two things: which phone numbers are allowed to reach the switchboard at all (the inbound gate), and how matched numbers' messages are routed once through (mode and bridge plugin). Its path is set via `PIMYWA_ROUTER` (default `router.json`). The file is loaded at startup — to apply changes, restart `pimywa-core`. The in-memory router can also be inspected and mutated live via `GET /api/router` and `POST /api/router/whitelist`.

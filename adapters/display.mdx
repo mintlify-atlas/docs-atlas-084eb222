@@ -1,7 +1,7 @@
 ---
-title: "Display Adapter: E-Paper and File Backends"
+title: "Display Adapter: E-Paper, File, and None Backends"
 sidebarTitle: "Display Adapter"
-description: "The Piumy display adapter reads status.json and renders the kaomoji face. Supports three backends: file (PNG, for development), epaper-waveshare, and none."
+description: "Configure the Piumy display adapter to render the kaomoji face on a Waveshare e-paper panel or PNG file. Covers env vars, refresh policy, and GPIO wiring."
 ---
 
 The display adapter (`adapters/display/service.py`) is a Python service that polls `status.json` and renders the pwnagotchi-style kaomoji face. It runs as the `pimywa-display` systemd service on the Pi, or as a one-shot script for development. The service never freezes — it drives a dynamic idle animation ticker that keeps the face alive between real status changes, lerping from a fast post-interaction cadence back to a slow, low-power idle blink as quiet time accumulates.
@@ -28,7 +28,7 @@ No output. The service starts and runs its status-polling loop normally, but not
   <Step title="Enable SPI on the Pi">
     Add to `/boot/firmware/config.txt` and reboot:
 
-    ```
+    ```ini
     dtparam=spi=on
     ```
   </Step>
@@ -112,11 +112,15 @@ All knobs are env-driven (zero hardcode). Set them in `/opt/pimywa/.env` (loaded
 | `PIMYWA_DISPLAY` | `file` | Backend: `file` \| `epaper-waveshare` \| `none` |
 | `PIMYWA_DISPLAY_OUT` | `display.png` | Output PNG path (file backend only) |
 | `PIMYWA_POLL_INTERVAL` | `2.0` | Seconds between `status.json` mtime checks |
-| `PIMYWA_ANIM_FAST_SEC` | `2.0` | Fast idle-tick right after a status change |
-| `PIMYWA_ANIM_SLOW_SEC` | `18.0` | Slow idle-tick after `PIMYWA_ANIM_RAMP_SEC` of quiet |
-| `PIMYWA_ANIM_RAMP_SEC` | `60.0` | Seconds of quiet to ramp FAST → SLOW |
-| `PIMYWA_LOW_BATT` | `15` | Battery % below which idle animation is 4x slower |
+| `PIMYWA_ANIM_FAST_SEC` | `25.0` | Fast idle-tick interval right after a real status change |
+| `PIMYWA_ANIM_SLOW_SEC` | `60.0` | Slow idle-tick interval once `PIMYWA_ANIM_RAMP_SEC` of quiet has passed |
+| `PIMYWA_ANIM_RAMP_SEC` | `180.0` | Seconds of quiet to ramp FAST → SLOW |
+| `PIMYWA_FACE_MIN_SEC` | `3.0` | Minimum seconds between face advances when piggybacking a data-change refresh |
+| `PIMYWA_LOW_BATT` | `15` | Battery % threshold for the battery-saver throttle |
+| `PIMYWA_BATTERY_SAVER` | `0` | Enable battery-saver mode (`1`): slows idle animation 4× when battery is below `PIMYWA_LOW_BATT` |
+| `PIMYWA_EPAPER_FULL_REFRESH` | `0` | Allow full-refresh flashes during operation (`1`): gates first-content-frame and big-mood-transition flashes; off by default |
 | `PIMYWA_SLEEP_ON_EXIT` | `1` | Put e-paper to sleep on service exit (`0` to skip) |
+| `PIMYWA_FACE_FILE` | `/run/pimywa/face.json` | Path the service writes the face sidecar to |
 | `PIMYWA_LOG_LEVEL` | `INFO` | Python logging level (`DEBUG` \| `INFO` \| `WARNING` \| `ERROR`) |
 
 ## E-paper hardware variables
@@ -152,11 +156,11 @@ The adapter minimizes panel flashing to preserve e-paper lifetime and avoid visu
 
 | Event | Refresh type | Notes |
 |---|---|---|
-| Boot | Full refresh | One-time init: `init()` + `Clear(0xFF)` + base image. Performed by the backend itself before the service loop starts. |
-| First content frame | Partial | Drawn from the known-blank boot baseline. |
+| Boot | Full refresh (unconditional) | One-time init: `init()` + `Clear(0xFF)` + base image. Performed by the backend itself before the service loop starts. Not gated by `PIMYWA_EPAPER_FULL_REFRESH`. |
+| First content frame | Full refresh (opt-in) | Drawn from the known-blank boot baseline. Gated by `PIMYWA_EPAPER_FULL_REFRESH` (default `0` / off); partial if the flag is off. |
 | Normal animation tick | Partial | No flash; only changed pixels update. |
 | Minor mood change | Partial | No flash. |
-| Major mood change | Full refresh (opt-in) | Entering or leaving `qr`, `error`, or `sleeping`. Gated by `PIMYWA_EPAPER_FULL_REFRESH` (default `0` / off). |
+| Major mood change | Full refresh (opt-in) | Entering or leaving `qr`, `error`, or `sleeping`. Gated by `PIMYWA_EPAPER_FULL_REFRESH` (default `0` / off); partial if the flag is off. |
 | Identical image | Skipped entirely | No pointless partial update sent to the panel. |
 | Anti-ghosting | Full refresh | Fires automatically every `PIMYWA_EPAPER_GHOST_PARTIALS` partials (default 40) to clear accumulated ghost pixels. |
 

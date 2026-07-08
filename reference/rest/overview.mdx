@@ -1,7 +1,7 @@
 ---
-title: "REST API Overview: Quick Access to Piumy Data"
+title: "Piumy REST API Overview: Authentication and Base URL"
 sidebarTitle: "Overview"
-description: "Piumy's REST API on port 8080 provides quick curl/script access to chats, messages, status, and settings — mirroring the MCP tools without requiring an MCP client."
+description: "Piumy's REST API runs on port 8080, secured by X-API-Key header or ?key= param. Open when key is empty. Mirrors all MCP tools without an MCP client."
 ---
 
 Piumy serves a REST API on port `8080` (controlled by `PIMYWA_API_ADDR`) from the same binary as the MCP server. It's designed for quick access from curl, shell scripts, or the dashboard — no MCP client setup needed. Both the MCP server and REST API share the same store and in-memory state, so every read reflects the current live switchboard.
@@ -29,7 +29,7 @@ The auth check is enforced on every `/api/*` path. The `/healthz` endpoint is al
 
 ## Base URL
 
-```
+```text
 http://<host>:8080
 ```
 
@@ -50,13 +50,30 @@ Replace `<host>` with your board's hostname (e.g. `piumy.local`) or IP address. 
 | POST | `/api/handled` | Mark a message as handled |
 | GET | `/api/battery/log` | Discharge/charge trace (historical CSV rows) |
 | GET | `/api/events` | Server-sent events (SSE) stream |
+| GET | `/api/qr.svg` | Current QR code as an SVG image |
 | GET | `/api/settings` | Current runtime settings |
 | POST | `/api/settings` | Update runtime settings |
 | GET | `/api/killswitch` | Kill switch (mute) state |
 | POST | `/api/killswitch` | Toggle the kill switch |
+| GET | `/api/gateway` | Gateway running state and connection info |
+| POST | `/api/gateway` | Start or stop the WhatsApp gateway |
+| POST | `/api/reconnect` | Resume the gateway after a reconnect pause |
 | GET | `/api/backup` | Session backup status |
 | POST | `/api/backup` | Trigger a manual backup |
+| GET | `/api/mcp-guard` | MCP anti-flood limiter status |
+| POST | `/api/mcp-guard` | Update MCP anti-flood thresholds |
 | GET | `/api/router` | Current router config snapshot |
+| POST | `/api/router/whitelist` | Add or remove a JID from the whitelist |
+| POST | `/api/router/allowall` | Enable or disable the allow-all flag |
+| GET | `/api/rules` | Global and by-type rules tiers |
+| POST | `/api/rules/type` | Set by-type rules (individual or group) |
+| POST | `/api/rules/default` | Set the global default rules |
+| POST | `/api/chats/boss` | Mark or unmark a chat as the trusted owner |
+| POST | `/api/chats/rules` | Set per-chat behavior rules |
+| POST | `/api/chats/description` | Set a chat's description |
+| POST | `/api/chats/confirmation` | Set a chat's confirmation mode |
+| POST | `/api/drafts/approve` | Approve a pending auto-reply draft |
+| POST | `/api/drafts/discard` | Discard a pending auto-reply draft |
 
 <Tip>
   For the full request/response shapes, parameter details, and curl examples for

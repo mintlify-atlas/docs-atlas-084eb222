@@ -1,7 +1,7 @@
 ---
-title: "MCP Tools Overview: All 23 Piumy Tools"
+title: "Piumy MCP Server Reference: All 23 Tools at a Glance"
 sidebarTitle: "Overview"
-description: "Piumy exposes 23 MCP tools for AI agents to read chats, manage the queue, send replies, and perform admin operations. The endpoint is fail-closed — requires a bearer token."
+description: "Piumy exposes 23 MCP tools for AI agents to triage chats, send replies, and manage the switchboard. Fail-closed — requires a bearer token."
 ---
 
 Piumy exposes its MCP server on port `8081` using the streamable HTTP transport. All 23 tools are authenticated — every request must include a valid bearer token via the `Authorization: Bearer` header. The endpoint is **fail-closed**: if `PIMYWA_MCP_KEY` is not configured, every request is rejected with `{"error":"unauthorized"}`. There is no "open by default" mode.

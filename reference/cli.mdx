@@ -14,7 +14,7 @@ pimywa [serve | state <mood> | seed | restore-session [--force] <file> | auth <s
 
 ## pimywa serve
 
-Start the full Piumy switchboard. When `PIMYWA_GATEWAY=whatsmeow` (the default for production installs), the process connects to WhatsApp on startup. It then brings up three listening servers:
+Start the full Piumy switchboard. The gateway is disabled by default (`PIMYWA_GATEWAY=none`); set it to `whatsmeow` to connect to WhatsApp on startup. It brings up three listening servers:
 
 | Server | Default address | Env var |
 |---|---|---|
@@ -25,15 +25,15 @@ Start the full Piumy switchboard. When `PIMYWA_GATEWAY=whatsmeow` (the default f
 There are no flags — all configuration comes from environment variables.
 
 ```bash
-# Production: reads PIMYWA_GATEWAY from the environment file
-/opt/pimywa/pimywa serve
+# Production: connect to WhatsApp on startup
+PIMYWA_GATEWAY=whatsmeow /opt/pimywa/pimywa serve
 
-# Development / no WhatsApp connection
-PIMYWA_GATEWAY=none pimywa serve
+# Default / no WhatsApp connection
+pimywa serve
 ```
 
 <Note>
-When `PIMYWA_GATEWAY=none`, the switchboard starts without connecting to WhatsApp. The MCP server, REST API, and dashboard are all fully operational — useful for local development or when testing with seeded data.
+When `PIMYWA_GATEWAY=none` (the default), the switchboard starts without connecting to WhatsApp. The MCP server, REST API, and dashboard are all fully operational — useful for local development or when testing with seeded data.
 </Note>
 
 **Graceful shutdown.** Send `SIGINT` or `SIGTERM` to stop the process cleanly. On receipt of either signal, `serve` will:
@@ -49,7 +49,7 @@ When `PIMYWA_GATEWAY=none`, the switchboard starts without connecting to WhatsAp
 
 Write a mood directly to `status.json`. Useful for testing the display adapter without running the full switchboard — you can drive every face expression from the command line.
 
-**Argument:** `<mood>` — required.
+**Argument:** `<mood>` — optional; defaults to `idle` when omitted.
 
 Valid values:
 
@@ -167,7 +167,6 @@ Decrypt a session backup and replace the live WhatsApp session database. This co
 **Prerequisites** (the command validates all of these before touching anything):
 
 - `PIMYWA_BACKUP_KEY` must be set — it is the decryption key for the backup.
-- `PIMYWA_SESSION_DB` must point to the live session file that will be replaced.
 - `pimywa serve` must **not** be running — detected via a lock file written by `serve` at startup and cleared on clean shutdown.
 
 ```bash
@@ -185,11 +184,11 @@ Never run `restore-session` while `pimywa serve` is running. The command checks 
 ## Building the binary
 
 ```bash
-# Build for the current platform
+# Build for the current platform (run from the core/ directory)
 cd core && go build -o pimywa .
 
-# Cross-compile for Raspberry Pi (arm64) from macOS/Linux
-GOOS=linux GOARCH=arm64 go build -o pimywa-arm64 .
+# Cross-compile for Raspberry Pi / ARM64 board (run from the core/ directory)
+cd core && GOOS=linux GOARCH=arm64 go build -o pimywa .
 ```
 
 The core has no CGO dependencies — it uses `modernc.org/sqlite` (pure Go), so cross-compilation works without a cross-compiler toolchain.

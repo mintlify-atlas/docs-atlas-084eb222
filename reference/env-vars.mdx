@@ -1,7 +1,7 @@
 ---
-title: "Piumy Environment Variables Reference"
+title: "Piumy Environment Variables: Complete PIMYWA_* Reference"
 sidebarTitle: "Env Vars"
-description: "Complete reference for all PIMYWA_* environment variables. Loaded from /opt/pimywa/pimywa.env by the systemd services."
+description: "All PIMYWA_* environment variables with defaults: gateway, delays, rate limits, MCP guard, backup, battery, bridge, and dashboard settings."
 ---
 
 Every Piumy setting is an environment variable — no config file format to learn, no YAML schema to maintain. The systemd services load `/opt/pimywa/pimywa.env` via `EnvironmentFile=`. Set variables there and restart the relevant service to apply changes.
@@ -274,6 +274,12 @@ These rate limits apply to **inbound MCP tool calls** from a connected AI agent 
   Path to the face sidecar written by the display adapter. The display adapter
   writes the live kaomoji face here; the core merges it into `status.json` on
   its heartbeat. Lives in tmpfs by default.
+</ParamField>
+
+<ParamField path="PIMYWA_FACE_MAX_AGE" type="duration" default="120s">
+  How old a `face.json` reading can be before the core treats it as stale
+  (returns `null` for the `face` field rather than showing an old value).
+  Defaults to 120s — the same as `PIMYWA_BATTERY_MAX_AGE`.
 </ParamField>
 
 ---
