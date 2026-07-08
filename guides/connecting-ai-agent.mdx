@@ -1,0 +1,144 @@
+---
+title: "Connect an AI Agent to Piumy over MCP"
+sidebarTitle: "Connect AI Agent"
+description: "Configure Claude Code, OpenCode, or any MCP-compatible agent to read WhatsApp messages from Piumy and send replies through the switchboard's anti-ban governor."
+---
+
+Piumy exposes an MCP (Model Context Protocol) server on port **8081**. Any MCP-compatible client — Claude Code, OpenCode, or a custom agent — can connect, read the queue, and send replies. The agent never runs on the board itself; it connects from your PC or any machine that has the RAM to run an LLM. The switchboard handles all the WhatsApp protocol, anti-ban pacing, and persistent storage.
+
+## Prerequisites
+
+Before connecting an agent, make sure the following are in place:
+
+<Steps>
+  <Step title="MCP bearer token configured">
+    Run `sudo /opt/pimywa/pimywa auth setup` on the Pi and save the printed token. See the [MCP Auth guide](/guides/mcp-auth) for details.
+  </Step>
+  <Step title="Piumy core running with the WhatsApp gateway">
+    The core must be running with `PIMYWA_GATEWAY=whatsmeow` and a linked WhatsApp session. See [Connect WhatsApp](/guides/connecting-whatsapp).
+  </Step>
+  <Step title="At least one chat in advanced mode">
+    The agent queue only contains chats whose mode is set to `advanced`. Configure routing in `router.json` or switch a chat's mode from the dashboard or via the `set_mode` MCP tool.
+  </Step>
+</Steps>
+
+## MCP client configuration
+
+<Tabs>
+  <Tab title="Claude Code">
+    Add the following to `.mcp.json` in your project root:
+
+    ```json
+    {
+      "mcpServers": {
+        "piumy": {
+          "url": "http://piumy.local:8081/mcp",
+          "headers": {
+            "Authorization": "Bearer <token>"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="OpenCode">
+    Add the same structure to OpenCode's MCP config file:
+
+    ```json
+    {
+      "mcpServers": {
+        "piumy": {
+          "url": "http://piumy.local:8081/mcp",
+          "headers": {
+            "Authorization": "Bearer <token>"
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Custom agent">
+    Any HTTP client speaking the MCP streamable-HTTP protocol can connect. Include the bearer token on every request:
+
+    ```http
+    POST http://<pi-ip>:8081/mcp
+    Authorization: Bearer <token>
+    Content-Type: application/json
+    ```
+
+    As a fallback, you can also pass the token as a query parameter: `http://<pi-ip>:8081/mcp?key=<token>`.
+  </Tab>
+</Tabs>
+
+Replace `piumy.local` with the Pi's IP address if mDNS is not resolving on your network.
+
+## The Piumy skill
+
+The repository ships a Claude Code skill at `skill/piumy/SKILL.md`. Drop it into your Claude Code project to give the agent a clear operating model for Piumy. The skill covers:
+
+- What Piumy is (a switchboard that routes and stores — it never initiates)
+- The ordered tool loop to follow on every session
+- Anti-ban laws that are non-negotiable
+- How to handle groups, escalations, and multi-agent coordination
+
+The skill teaches the agent to use the Piumy tools in the correct order:
+
+1. **`get_pending` / `get_queue`** — discover what is waiting for attention
+2. **`list_chats` / `get_chat` / `get_messages`** — read context and history
+3. **`get_decision_policy`** — read the owner's rules before deciding to reply
+4. **`send_message`** with the current `policy_version`
+5. **`mark_handled`** when the conversation turn is complete
+
+## The operating loop
+
+The agent follows a deliberate loop on every session. Understanding it helps you configure rules and debug unexpected behaviour.
+
+<Steps>
+  <Step title="Check the queue">
+    Call `get_pending` to see chats where `last_speaker == "them"` — these are candidates for a reply, not a mandatory to-do list. The agent should judge each by date and relevance.
+  </Step>
+  <Step title="Read chat context">
+    Call `get_chat` to read the chat's mode, rules, memory (particular facts about the contact), and context (the general situation). Also call `get_messages` to see the actual conversation history.
+  </Step>
+  <Step title="Read the decision policy">
+    Call `get_decision_policy` before every `send_message`. This returns the current policy text and a `policy_version` hash. The hash is required in the next step.
+  </Step>
+  <Step title="Send a reply">
+    Call `send_message` with four required fields: `to` (the full JID, e.g. `56999999999@s.whatsapp.net`), `message` (text to send), `model` (the agent's identity string), and `policy_version` (the hash from the previous step). The gateway dispatches the message with anti-ban delays applied — it is not sent instantly.
+  </Step>
+  <Step title="Mark as handled">
+    Call `mark_handled` with the `chat_id` and `message_id` once the turn is complete. This removes the item from the queue so it is not processed again.
+  </Step>
+</Steps>
+
+<Note>
+  The agent must call `get_decision_policy` before every `send_message`. A stale or missing `policy_version` is rejected — this forces the agent to re-read the policy whenever the owner edits it, so stale rules can never quietly drive replies.
+</Note>
+
+### Anti-ban laws
+
+These constraints are enforced at the governor level and cannot be overridden by the agent:
+
+- **Inbound only** — the agent responds to messages received, never initiates contact with strangers.
+- **Whitelist by default** — a number must be in the router whitelist before any outbound message can reach it.
+- **Never fight the governor** — the anti-ban governor adds human-paced delays, typing indicators, and rate limits. If a send is rejected, do not retry in a tight loop.
+- **Mute is authoritative** — while the kill switch is active, `send_message` returns an error. Stop and wait; do not loop.
+
+## Multi-agent setups
+
+When multiple agents are connected simultaneously, use `claim_chat` and `release_chat` to prevent two agents from attending the same conversation at once.
+
+- `claim_chat` — reserves a chat for a given `model` identity for a limited TTL. Idempotent: re-claiming your own claim renews it.
+- `release_chat` — releases the claim early. No-op if you don't currently hold it.
+- `get_pending` returns `claimed_by` and `claimed_until` on each item so agents can see what is already spoken for before investing work drafting a reply.
+
+A solo agent that never calls `claim_chat` is unaffected — `send_message` only blocks if a claim is held by a *different* model.
+
+<CardGroup cols={2}>
+  <Card title="MCP Auth" icon="key" href="/guides/mcp-auth">
+    Generate and rotate the bearer token required to connect.
+  </Card>
+  <Card title="Connect WhatsApp" icon="whatsapp" href="/guides/connecting-whatsapp">
+    Link a WhatsApp number to the switchboard before the agent can send.
+  </Card>
+</CardGroup>

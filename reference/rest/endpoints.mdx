@@ -1,0 +1,574 @@
+---
+title: "REST API Endpoints for Piumy"
+sidebarTitle: "Endpoints"
+description: "Full reference for every Piumy REST endpoint: method, path, authentication, request/response shapes, and curl examples."
+---
+
+Complete reference for every REST endpoint exposed by the Piumy core. All `/api/*` paths require the `X-API-Key` header (or `?key=` query param) when `PIMYWA_API_KEY` is set. The `/healthz` endpoint has no authentication requirement.
+
+All successful responses are `application/json` unless noted otherwise. Error responses follow the shape `{"error": "<message>"}`.
+
+---
+
+## GET /healthz
+
+Simple liveness check. Returns the plain text string `ok` with a `200` status. Use this for load balancer probes or systemd `ExecStartPost` checks.
+
+**Auth:** None
+
+```bash
+curl http://piumy.local:8080/healthz
+```
+
+```
+ok
+```
+
+---
+
+## GET /api/status
+
+Returns the current switchboard status snapshot — the same data written to `status.json` on disk. Includes WhatsApp connection state, queue depth, mood, battery, system metrics, and agent connectivity. See the [status.json contract](/reference/status-contract) for the complete field reference.
+
+**Auth:** Required
+
+```bash
+curl http://piumy.local:8080/api/status \
+  -H "X-API-Key: <key>"
+```
+
+```json
+{
+  "mood": "few",
+  "speech": "3 waiting",
+  "queue": 3,
+  "last_msg": "hey are you there?",
+  "wa_connected": true,
+  "show_qr": false,
+  "qr_data": null,
+  "battery": 82,
+  "voltage": 3940,
+  "charging": false,
+  "time_remaining": 210,
+  "cpu": 12,
+  "ram": 44,
+  "wifi": 3,
+  "ip": "192.168.1.42",
+  "hostname": "piumy.local",
+  "ssid": "HomeWifi",
+  "own_jid": "56999999999@s.whatsapp.net",
+  "agent_connected": true,
+  "agents": 1,
+  "uptime": 3600,
+  "reconnect_paused": false,
+  "muted": false,
+  "sent": 128,
+  "face": "(◕‿◕)",
+  "updated_at": "2026-03-15T14:22:05Z"
+}
+```
+
+---
+
+## GET /api/chats
+
+Lists recent chats, ordered by last activity. Returns metadata for each chat including JID, display name, current mode, and last message preview.
+
+**Auth:** Required
+
+<ParamField query="limit" type="integer" default="20">
+  Maximum number of chats to return.
+</ParamField>
+
+```bash
+curl "http://piumy.local:8080/api/chats?limit=5" \
+  -H "X-API-Key: <key>"
+```
+
+```json
+[
+  {
+    "jid": "56999999999@s.whatsapp.net",
+    "name": "Alice",
+    "mode": "advanced",
+    "last_msg": "Can you check on my order?",
+    "updated_at": "2026-03-15T14:20:00Z"
+  },
+  {
+    "jid": "56988888888@s.whatsapp.net",
+    "name": "Bob",
+    "mode": "auto",
+    "last_msg": "Thanks!",
+    "updated_at": "2026-03-15T13:05:00Z"
+  }
+]
+```
+
+---
+
+## GET /api/messages
+
+Returns messages from a specific chat, ordered newest-first.
+
+**Auth:** Required
+
+<ParamField query="chat" type="string" required>
+  The chat's JID (e.g. `56999999999@s.whatsapp.net`). Required.
+</ParamField>
+
+<ParamField query="limit" type="integer" default="20">
+  Maximum number of messages to return.
+</ParamField>
+
+```bash
+curl "http://piumy.local:8080/api/messages?chat=56999999999%40s.whatsapp.net&limit=10" \
+  -H "X-API-Key: <key>"
+```
+
+```json
+[
+  {
+    "id": "3EB0A1B2C3D4E5F6",
+    "chat": "56999999999@s.whatsapp.net",
+    "from_me": false,
+    "body": "Can you check on my order?",
+    "timestamp": 1710509200,
+    "handled": false
+  },
+  {
+    "id": "3EB0A1B2C3D4E5F7",
+    "chat": "56999999999@s.whatsapp.net",
+    "from_me": true,
+    "body": "Of course, let me look into that.",
+    "timestamp": 1710508800,
+    "handled": true
+  }
+]
+```
+
+---
+
+## GET /api/queue
+
+Returns advanced-mode messages that are waiting for an agent to handle. This is the same set that drives the `queue` field in the status snapshot.
+
+**Auth:** Required
+
+<ParamField query="limit" type="integer" default="20">
+  Maximum number of queued messages to return.
+</ParamField>
+
+```bash
+curl "http://piumy.local:8080/api/queue?limit=20" \
+  -H "X-API-Key: <key>"
+```
+
+```json
+[
+  {
+    "id": "3EB0A1B2C3D4E5F6",
+    "chat": "56999999999@s.whatsapp.net",
+    "from_me": false,
+    "body": "Can you check on my order?",
+    "timestamp": 1710509200,
+    "handled": false
+  }
+]
+```
+
+---
+
+## POST /api/send
+
+Queues an outbound message. The gateway dispatches it with the configured anti-ban delay (`PIMYWA_DELAY_DISPATCH_MIN` / `PIMYWA_DELAY_DISPATCH_MAX`). The message is rate-limited by `PIMYWA_RATE_LIMIT_PER_MIN` and `PIMYWA_RATE_LIMIT_PER_DAY`. Rejected outright if the kill switch is on (`muted: true`).
+
+**Auth:** Required
+
+<ParamField body="To" type="string" required>
+  Destination JID (e.g. `56999999999@s.whatsapp.net`).
+</ParamField>
+
+<ParamField body="Message" type="string" required>
+  Message text to send.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/send \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"To": "56999999999@s.whatsapp.net", "Message": "Hello!"}'
+```
+
+```json
+{"status": "queued"}
+```
+
+---
+
+## POST /api/mode
+
+Sets a chat's routing mode. `auto` enables the bridge for auto-replies; `advanced` puts the chat in the agent queue.
+
+**Auth:** Required
+
+<ParamField body="Chat" type="string" required>
+  The chat's JID.
+</ParamField>
+
+<ParamField body="Mode" type="string" required>
+  `auto` or `advanced`.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/mode \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"Chat": "56999999999@s.whatsapp.net", "Mode": "advanced"}'
+```
+
+```json
+{"status": "ok", "mode": "advanced"}
+```
+
+---
+
+## POST /api/escalate
+
+Convenience wrapper around `POST /api/mode` that always sets the chat to `advanced`. Equivalent to `{"Chat": "...", "Mode": "advanced"}` but more explicit about intent.
+
+**Auth:** Required
+
+<ParamField body="Chat" type="string" required>
+  The chat's JID.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/escalate \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"Chat": "56999999999@s.whatsapp.net"}'
+```
+
+```json
+{"status": "escalated"}
+```
+
+---
+
+## POST /api/handled
+
+Marks a specific message as handled so it no longer appears in the advanced-mode queue.
+
+**Auth:** Required
+
+<ParamField body="Chat" type="string" required>
+  The chat's JID.
+</ParamField>
+
+<ParamField body="ID" type="string" required>
+  The message ID to mark as handled.
+</ParamField>
+
+```bash
+curl -X POST http://piumy.local:8080/api/handled \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"Chat": "56999999999@s.whatsapp.net", "ID": "3EB0A1B2C3D4E5F6"}'
+```
+
+```json
+{"status": "ok"}
+```
+
+---
+
+## GET /api/battery/log
+
+Returns a window of the discharge/charge trace CSV rows written by the power adapter (`adapters/power/timeremain.py`). Useful for rendering a time-series battery chart on the dashboard. Returns the most recent rows up to `limit`, oldest first.
+
+If `PIMYWA_BATTERY_LOG_FILE` is not configured or the file does not yet exist, this endpoint returns an empty array (`[]`) rather than an error — a missing trace is a normal degraded state, not a broken deployment.
+
+**Auth:** Required
+
+<ParamField query="limit" type="integer" default="500">
+  Maximum number of trace rows to return (most recent window).
+</ParamField>
+
+```bash
+curl "http://piumy.local:8080/api/battery/log?limit=100" \
+  -H "X-API-Key: <key>"
+```
+
+```json
+[
+  {
+    "ts": 1710508200,
+    "voltage_mv": 3980,
+    "raw_pct": 85,
+    "linearized_pct": 82.4,
+    "charging": false
+  },
+  {
+    "ts": 1710508260,
+    "voltage_mv": 3975,
+    "raw_pct": 84,
+    "linearized_pct": 81.9,
+    "charging": false
+  }
+]
+```
+
+<ResponseField name="ts" type="integer">
+  Unix timestamp of the sample.
+</ResponseField>
+
+<ResponseField name="voltage_mv" type="integer | null">
+  Raw cell voltage in millivolts, or `null` if not available from the hardware.
+</ResponseField>
+
+<ResponseField name="raw_pct" type="integer">
+  Raw voltage-curve battery percentage (can appear jumpy — prefer `linearized_pct` for display).
+</ResponseField>
+
+<ResponseField name="linearized_pct" type="number">
+  Linearized battery percentage as estimated by the power adapter's adaptive model.
+</ResponseField>
+
+<ResponseField name="charging" type="boolean">
+  `true` if the power adapter inferred charging at this sample.
+</ResponseField>
+
+---
+
+## GET /api/events
+
+Opens a Server-Sent Events (SSE) stream. The server emits a `data:` event on every inbound message. A keep-alive comment (`: keep-alive`) is sent every 20 seconds so the connection stays alive through proxies and load balancers.
+
+Use this for real-time dashboard updates without polling `GET /api/status`.
+
+**Auth:** Required (key may be passed via `?key=` for `EventSource` compatibility)
+
+**Response content-type:** `text/event-stream`
+
+```bash
+curl -N "http://piumy.local:8080/api/events?key=<key>"
+```
+
+```
+: keep-alive
+
+data: {"type":"message","chat":"56999999999@s.whatsapp.net"}
+
+: keep-alive
+```
+
+<Note>
+  When using the browser's native `EventSource` API, the `X-API-Key` header
+  cannot be set. Pass the key via `?key=` instead. On a trusted LAN this is
+  acceptable; be aware the key may appear in proxy access logs.
+</Note>
+
+---
+
+## GET /api/settings
+
+Returns the current runtime settings, including media download filters, anti-ban delay windows, and rate limits. Also includes the floors and ceilings enforced by the guardrails (delay floors can never be tightened below the shipped defaults; rate limit ceilings can never be loosened past the configured maximums).
+
+**Auth:** Required
+
+```bash
+curl http://piumy.local:8080/api/settings \
+  -H "X-API-Key: <key>"
+```
+
+```json
+{
+  "media_skip_video_group": false,
+  "media_skip_video_chat": false,
+  "media_skip_photo_group": false,
+  "media_skip_photo_chat": false,
+  "media_max_mb": 512,
+  "dispatch_delay_min_sec": 1.0,
+  "dispatch_delay_max_sec": 5.0,
+  "read_delay_min_sec": 2.0,
+  "read_delay_max_sec": 8.0,
+  "action_delay_min_sec": 1.0,
+  "action_delay_max_sec": 4.0,
+  "rate_limit_per_min": 10,
+  "rate_limit_per_day": 500,
+  "floors": {
+    "dispatch_delay_sec": 1.0,
+    "read_delay_sec": 2.0,
+    "action_delay_sec": 1.0,
+    "media_max_mb": 3
+  },
+  "ceilings": {
+    "rate_limit_per_min": 10,
+    "rate_limit_per_day": 500
+  }
+}
+```
+
+---
+
+## POST /api/settings
+
+Updates runtime settings. Changes take effect immediately without a restart. The response echoes the effective (post-guardrail-clamp) settings.
+
+**Guardrails:**
+- Delay windows can only be **loosened** (slower), never tightened below the shipped defaults.
+- Rate limits can only be **tightened** (lower), never raised past the configured ceilings.
+- `media_max_mb` is floored at a sane minimum so the media GC can never be effectively disabled.
+
+**Auth:** Required
+
+```bash
+curl -X POST http://piumy.local:8080/api/settings \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "media_skip_video_group": true,
+    "media_max_mb": 256,
+    "dispatch_delay_min_sec": 2.0,
+    "dispatch_delay_max_sec": 8.0,
+    "read_delay_min_sec": 3.0,
+    "read_delay_max_sec": 10.0,
+    "action_delay_min_sec": 1.0,
+    "action_delay_max_sec": 4.0,
+    "rate_limit_per_min": 5,
+    "rate_limit_per_day": 200
+  }'
+```
+
+Returns the same shape as `GET /api/settings` with the effective post-clamp values.
+
+---
+
+## GET /api/killswitch
+
+Returns the current state of the kill switch (mute). When the kill switch is on, `send_message` (via MCP) and `POST /api/send` are both rejected, and the status mood becomes `muted`.
+
+**Auth:** Required
+
+```bash
+curl http://piumy.local:8080/api/killswitch \
+  -H "X-API-Key: <key>"
+```
+
+```json
+{"on": false}
+```
+
+---
+
+## POST /api/killswitch
+
+Enables or disables the kill switch. The state is mirrored into `status.json` as `muted` so the display adapter can show the muted face.
+
+**Auth:** Required
+
+<ParamField body="On" type="boolean" required>
+  `true` to mute all outbound sends; `false` to resume.
+</ParamField>
+
+```bash
+# Mute all sends
+curl -X POST http://piumy.local:8080/api/killswitch \
+  -H "X-API-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"On": true}'
+```
+
+```json
+{"on": true}
+```
+
+---
+
+## GET /api/backup
+
+Returns session backup status: whether backups are enabled, how many are retained, and the most recent backup's metadata.
+
+Returns `503` if `PIMYWA_BACKUP_KEY` is not set (backups are disabled).
+
+**Auth:** Required
+
+```bash
+curl http://piumy.local:8080/api/backup \
+  -H "X-API-Key: <key>"
+```
+
+```json
+{
+  "enabled": true,
+  "last_backup": "2026-03-15T00:00:00Z",
+  "count": 5,
+  "dir": "/opt/pimywa/data/backups"
+}
+```
+
+---
+
+## POST /api/backup
+
+Triggers a manual session backup immediately. Returns the resulting backup file metadata. Returns `503` if backups are disabled (no `PIMYWA_BACKUP_KEY` configured).
+
+<Note>
+  Session restore is deliberately **not** exposed over the REST API. It is a
+  CLI-only operation (`pimywa restore-session`) — replacing the live session
+  over the LAN is intentionally out of scope for this API.
+</Note>
+
+**Auth:** Required
+
+**Body:** None
+
+```bash
+curl -X POST http://piumy.local:8080/api/backup \
+  -H "X-API-Key: <key>"
+```
+
+```json
+{
+  "path": "/opt/pimywa/data/backups/wa-session-2026-03-15T14-22-05Z.enc",
+  "size": 32768,
+  "created_at": "2026-03-15T14:22:05Z"
+}
+```
+
+---
+
+## GET /api/router
+
+Returns the current in-memory router configuration: the whitelist, `allow_all` flag, `default_mode`, and routes. See [router.json reference](/reference/router-json) for the full field documentation.
+
+**Auth:** Required
+
+```bash
+curl http://piumy.local:8080/api/router \
+  -H "X-API-Key: <key>"
+```
+
+```json
+{
+  "allow_all": false,
+  "default_mode": "advanced",
+  "whitelist": [
+    "56999999999@s.whatsapp.net"
+  ],
+  "routes": [
+    {
+      "match": "56999999999@s.whatsapp.net",
+      "mode": "advanced",
+      "plugin": "mcp-agent",
+      "model": "claude-opus-4-8"
+    },
+    {
+      "match": "*",
+      "mode": "advanced",
+      "plugin": "none",
+      "model": ""
+    }
+  ]
+}
+```

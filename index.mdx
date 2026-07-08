@@ -1,20 +1,101 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Piumy: Self-Hosted WhatsApp AI Gateway"
+sidebarTitle: "Home"
+description: "Piumy routes your WhatsApp through a tiny ARM board, stores every message in SQLite, and exposes an MCP interface so any AI agent can read and reply — with an e-paper face that reacts to what's happening."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+Piumy is a self-hosted WhatsApp switchboard that runs on a Raspberry Pi Zero 2 W (or any ARM64 board, or your PC). The board routes and stores — it never thinks and never initiates. Your AI agent connects over [MCP](https://modelcontextprotocol.io) from a separate machine with RAM, reads the queue, and sends replies through the governor's anti-ban pacing. A pwnagotchi-style e-paper face reacts to every event in real time.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the core and render the e-paper face on your PC in minutes — no hardware, no WhatsApp required.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Understand how the switchboard, MCP server, adapters, and AI agent fit together.
+  </Card>
+  <Card title="Install on Raspberry Pi" icon="microchip" href="/installation/raspberry-pi">
+    One-command installer for Raspberry Pi OS Lite 64-bit with systemd services.
+  </Card>
+  <Card title="MCP Tools Reference" icon="wrench" href="/reference/mcp/overview">
+    Full reference for all 19 MCP tools your AI agent uses to read chats and send replies.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## How it works
+
+```
+WhatsApp (dedicated number)
+      │
+      ▼
+  SWITCHBOARD (Go, tiny board) ── e-paper (Python adapter) → face
+   · receives / stores (SQLite)     └ reads status.json
+   · per-chat mode: auto | advanced
+   · anti-ban governor · whitelist
+   · exposes MCP ──────────────┐
+        │ auto                 │ advanced (queue, pull)
+        ▼                      ▼
+   cheap API             AGENT over MCP (your PC)
+   (optional)             Claude / OpenCode + tools
+```
+
+The switchboard does not reply — it routes and stores. Replies come from whoever connects over MCP. The seams are data contracts: `status.json` (core ↔ display) and MCP/HTTP (core ↔ agent).
+
+## Get started in three steps
+
+<Steps>
+  <Step title="Try it on your PC — no hardware needed">
+    Run the Go core to write a `status.json`, then render the e-paper face as a PNG. Zero WhatsApp, zero hardware required.
+
+    ```bash
+    cd core && go run . state responding
+    cd ../adapters/display/file
+    pip install -r requirements.txt
+    python render.py   # → display.png
+    ```
+  </Step>
+  <Step title="Deploy to a Raspberry Pi">
+    Flash Raspberry Pi OS Lite 64-bit, clone the repo, and run the one-command installer. It provisions systemd services and applies power-loss resilience measures.
+
+    ```bash
+    sudo ./deploy/install.sh
+    ```
+
+    See [Install on Raspberry Pi](/installation/raspberry-pi) for full details.
+  </Step>
+  <Step title="Connect your AI agent">
+    Generate an MCP bearer token, paste it into your Claude Code or OpenCode `.mcp.json`, and point your agent at the switchboard.
+
+    ```bash
+    sudo /opt/pimywa/pimywa auth setup
+    ```
+
+    See [MCP Authentication](/guides/mcp-auth) for the exact client config snippet.
+  </Step>
+</Steps>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="WhatsApp Gateway" icon="message" href="/concepts/switchboard">
+    Receives, stores, and routes messages via whatsmeow. All history lives in a local SQLite database — it's yours.
+  </Card>
+  <Card title="MCP Interface" icon="brain" href="/reference/mcp/overview">
+    19 tools for your AI agent: read chats, pull the queue, send replies, manage memory and context per contact.
+  </Card>
+  <Card title="Anti-Ban Governor" icon="shield" href="/concepts/governor">
+    Rate limits, randomized human-pacing delays, a mute/kill switch, and reconnect backoff protect your account.
+  </Card>
+  <Card title="E-Paper Face" icon="face-smile" href="/concepts/e-paper-face">
+    Real pwnagotchi kaomoji faces with a 12-frame eye-gaze loop, animated reactions to every event.
+  </Card>
+  <Card title="Web Dashboard" icon="gauge" href="/guides/dashboard">
+    Battery chart, WhatsApp link/QR, per-chat rules, rate limits, and router config — served on LAN port 80.
+  </Card>
+  <Card title="Session Backup" icon="database" href="/guides/session-backup">
+    Encrypted session snapshots with scrypt key derivation. Restore from backup with a single CLI command.
+  </Card>
+</CardGroup>
+
+## License
+
+Piumy is [AGPL-3.0](https://github.com/chamilonster/Piumy/blob/master/LICENSE). You are free to use, modify, and distribute it — your version must also be AGPL-3.0. A commercial license is available for closed-source products.

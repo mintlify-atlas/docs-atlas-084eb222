@@ -1,0 +1,347 @@
+---
+title: "Piumy Environment Variables Reference"
+sidebarTitle: "Env Vars"
+description: "Complete reference for all PIMYWA_* environment variables. Loaded from /opt/pimywa/pimywa.env by the systemd services."
+---
+
+Every Piumy setting is an environment variable — no config file format to learn, no YAML schema to maintain. The systemd services load `/opt/pimywa/pimywa.env` via `EnvironmentFile=`. Set variables there and restart the relevant service to apply changes.
+
+```bash
+# Edit the env file
+sudo nano /opt/pimywa/pimywa.env
+
+# Restart the core to apply
+sudo systemctl restart pimywa-core
+```
+
+<Note>
+  `pimywa.env` is not committed to version control — it may contain secrets
+  such as `PIMYWA_API_KEY` and `PIMYWA_BACKUP_KEY`. The example file at
+  `deploy/pimywa.env.example` contains only safe placeholder values.
+</Note>
+
+---
+
+## Core paths
+
+<ParamField path="PIMYWA_DB" type="string" default="pimywa.db">
+  Path to the SQLite database that stores messages, chats, and settings. In
+  production deployments this lives at `/opt/pimywa/data/pimywa.db`.
+</ParamField>
+
+<ParamField path="PIMYWA_STATUS" type="string" default="status.json">
+  Path to `status.json` — the data contract between the core and the display
+  adapter. In production this is typically `/opt/pimywa/data/status.json` or a
+  tmpfs path under `/run/pimywa/`. See [status.json contract](/reference/status-contract).
+</ParamField>
+
+<ParamField path="PIMYWA_ROUTER" type="string" default="router.json">
+  Path to `router.json` — the whitelist and routing configuration. See
+  [router.json reference](/reference/router-json).
+</ParamField>
+
+<ParamField path="PIMYWA_SESSION_DB" type="string" default="/opt/pimywa/data/wa.db">
+  Path to the WhatsApp session SQLite database managed by whatsmeow. This holds
+  your linked-device credentials — back it up with `PIMYWA_BACKUP_KEY`.
+</ParamField>
+
+<ParamField path="PIMYWA_MEDIA_DIR" type="string" default="/opt/pimywa/data/media">
+  Directory where downloaded media files (images, videos, stickers) are written.
+  Never stored in SQLite. Controlled by the `PIMYWA_MEDIA_MAX_MB` GC policy.
+</ParamField>
+
+---
+
+## Network & auth
+
+<ParamField path="PIMYWA_MCP_ADDR" type="string" default=":8081">
+  Listen address for the MCP server (streamable HTTP). Accepts any `host:port`
+  form; `:8081` listens on all interfaces.
+</ParamField>
+
+<ParamField path="PIMYWA_API_ADDR" type="string" default=":8080">
+  Listen address for the REST API. Accepts any `host:port` form.
+</ParamField>
+
+<ParamField path="PIMYWA_MCP_KEY" type="string" default="">
+  MCP bearer token (`Authorization: Bearer <token>`). Empty means open — any
+  client can connect without authentication. Set via `pimywa auth setup`. This
+  is a separate secret from `PIMYWA_API_KEY`.
+</ParamField>
+
+<ParamField path="PIMYWA_API_KEY" type="string" default="">
+  REST API key. When set, every `/api/*` request must include it via the
+  `X-API-Key` header or `?key=` query param. Empty means the API is open —
+  development only, always bind to a private interface in that case.
+</ParamField>
+
+<ParamField path="PIMYWA_NAME" type="string" default="Piumy">
+  Display name shown on the e-paper display and in the dashboard footer.
+</ParamField>
+
+---
+
+## Gateway
+
+<ParamField path="PIMYWA_GATEWAY" type="string" default="none">
+  WhatsApp backend to use. `whatsmeow` enables the real connection;
+  `none` disables all WhatsApp connectivity — safe for development or
+  off-Pi builds.
+</ParamField>
+
+<ParamField path="PIMYWA_WA_DEVICE" type="string" default="Piumy">
+  Label shown in WhatsApp under **Linked Devices**. Only applies at pairing
+  time — changing this after linking does not rename an existing session.
+  Avoid names that reveal the underlying library to reduce ban fingerprinting
+  risk (e.g. use `Chrome (Windows)` for better camouflage).
+</ParamField>
+
+<ParamField path="PIMYWA_QR_TIMEOUT" type="duration" default="180s">
+  How long the gateway exposes a QR code before auto-stopping the link flow.
+  Only enforced when the device is not yet linked. Set to `0` for no timeout
+  (infinite exposure).
+</ParamField>
+
+---
+
+## Dashboard
+
+<ParamField path="PIMYWA_DASH" type="string" default="on">
+  Enable or disable the built-in web dashboard. Accepts `on`, `off`, `true`,
+  `false`, `1`, `yes`.
+</ParamField>
+
+<ParamField path="PIMYWA_DASH_ADDR" type="string" default=":80">
+  Listen address for the dashboard HTTP server.
+</ParamField>
+
+<ParamField path="PIMYWA_DASH_USER" type="string" default="admin">
+  Dashboard login username.
+</ParamField>
+
+<ParamField path="PIMYWA_DASH_PASS" type="string" default="">
+  Dashboard password in plaintext. Hashed with bcrypt in memory at startup.
+  If neither `PIMYWA_DASH_PASS` nor `PIMYWA_DASH_PASS_HASH` is set, a random
+  password is generated and logged once via `journalctl -u pimywa-core`.
+</ParamField>
+
+<ParamField path="PIMYWA_DASH_PASS_HASH" type="string" default="">
+  Pre-computed bcrypt hash of the dashboard password. When set, this takes
+  precedence over `PIMYWA_DASH_PASS`. Generate with `htpasswd -nbB admin <password>`.
+</ParamField>
+
+---
+
+## Anti-ban delays
+
+These delay windows bound the randomized human-pacing the gateway applies before each WhatsApp action. They can be **loosened** (slower) at runtime via the dashboard or `POST /api/settings`, but **never tightened below the defaults** — the defaults are the anti-ban floor.
+
+<ParamField path="PIMYWA_DELAY_DISPATCH_MIN" type="duration" default="1s">
+  Minimum delay before each outbound WhatsApp send.
+</ParamField>
+
+<ParamField path="PIMYWA_DELAY_DISPATCH_MAX" type="duration" default="5s">
+  Maximum delay before each outbound WhatsApp send.
+</ParamField>
+
+<ParamField path="PIMYWA_DELAY_READ_MIN" type="duration" default="2s">
+  Minimum delay before marking a message as read (delivering the read receipt).
+</ParamField>
+
+<ParamField path="PIMYWA_DELAY_READ_MAX" type="duration" default="8s">
+  Maximum delay before marking a message as read.
+</ParamField>
+
+<ParamField path="PIMYWA_DELAY_ACTION_MIN" type="duration" default="1s">
+  Minimum delay before other WhatsApp-server-facing actions (contact/group
+  sync fetches, etc.).
+</ParamField>
+
+<ParamField path="PIMYWA_DELAY_ACTION_MAX" type="duration" default="4s">
+  Maximum delay before other server-facing actions.
+</ParamField>
+
+---
+
+## Rate limits
+
+<ParamField path="PIMYWA_RATE_LIMIT_PER_MIN" type="integer" default="10">
+  Maximum number of outbound messages the governor allows per minute. Can be
+  tightened at runtime via `POST /api/settings` but never raised past this
+  configured ceiling.
+</ParamField>
+
+<ParamField path="PIMYWA_RATE_LIMIT_PER_DAY" type="integer" default="500">
+  Maximum number of outbound messages per day. Set to `0` to disable the daily
+  cap. Can be tightened at runtime but never raised past this configured ceiling.
+</ParamField>
+
+<ParamField path="PIMYWA_OUTBOX_MAX_RETRY" type="integer" default="5">
+  How many failed send attempts an outbox item is given before it is
+  dead-lettered. Prevents infinite retry loops that could trigger a ban.
+</ParamField>
+
+---
+
+## MCP anti-flood
+
+These rate limits apply to **inbound MCP tool calls** from a connected AI agent — separate from the outbound WhatsApp send limits above. Paced per MCP client session. Configurable at runtime via `POST /api/mcp-guard`.
+
+<ParamField path="PIMYWA_MCPGUARD_RATE_PER_MIN" type="integer" default="120">
+  Maximum general tool calls per minute per MCP session. Protects against a
+  buggy or runaway agent hammering the server.
+</ParamField>
+
+<ParamField path="PIMYWA_MCPGUARD_EMIT_RATE_PER_MIN" type="integer" default="20">
+  Maximum emit tool calls (send_message, escalate) per minute per session.
+  Stricter than the general rate because these cause real-world side effects.
+</ParamField>
+
+<ParamField path="PIMYWA_MCPGUARD_BLOCK_THRESHOLD" type="integer" default="5">
+  Number of consecutive throttled calls that trip the circuit breaker, fully
+  blocking the offending session until the cooldown expires.
+</ParamField>
+
+<ParamField path="PIMYWA_MCPGUARD_BLOCK_COOLDOWN" type="duration" default="5m">
+  How long a tripped (circuit-breaker) session remains fully blocked before
+  being allowed to try again.
+</ParamField>
+
+<ParamField path="PIMYWA_CLAIM_TTL_DEFAULT" type="duration" default="5m">
+  Default TTL for `claim_chat` locks when the caller omits `ttl_sec`. The hard
+  ceiling (30 minutes) is a Go constant and cannot be configured.
+</ParamField>
+
+---
+
+## Session backup
+
+<ParamField path="PIMYWA_BACKUP_KEY" type="string" default="">
+  Passphrase used to derive the session backup encryption key via scrypt. When
+  empty, backups are **completely disabled** — the WhatsApp session is never
+  written to disk in any form other than its live database. Set a strong
+  passphrase to enable periodic and on-demand backups.
+</ParamField>
+
+<ParamField path="PIMYWA_BACKUP_DIR" type="string" default="/opt/pimywa/data/backups">
+  Directory where encrypted session backup files are written. Note: the default
+  path is on the same SD card as the live session — this protects against DB
+  corruption but not against SD failure. For real disaster recovery, point this
+  at an off-SD path (NFS, USB stick, etc.).
+</ParamField>
+
+<ParamField path="PIMYWA_BACKUP_KEEP" type="integer" default="5">
+  How many of the newest backup files to retain. Older files are deleted on
+  each rotation.
+</ParamField>
+
+<ParamField path="PIMYWA_BACKUP_INTERVAL" type="duration" default="24h">
+  How often the periodic backup ticker runs, in addition to `POST /api/backup`
+  on-demand triggers and the automatic post-link backup.
+</ParamField>
+
+---
+
+## Battery & status heartbeat
+
+<ParamField path="PIMYWA_BATTERY_FILE" type="string" default="/run/pimywa/battery.json">
+  Path to the battery sidecar written by the power adapter (`adapters/power/`).
+  The core is the only writer of `status.json`; the power adapter writes here
+  instead and the core merges this reading in on its heartbeat. Lives in tmpfs
+  by default — zero SD wear.
+</ParamField>
+
+<ParamField path="PIMYWA_BATTERY_MAX_AGE" type="duration" default="120s">
+  How old a `battery.json` reading can be before the core treats it as stale
+  (returns `null` for battery fields rather than showing an old value). Set to
+  4× the power adapter's default 30s poll interval to tolerate a missed poll
+  or two without flickering.
+</ParamField>
+
+<ParamField path="PIMYWA_STATUS_HEARTBEAT" type="duration" default="15s">
+  How often the core re-writes `status.json` even when no event has occurred —
+  merges fresh sidecar readings and keeps `updated_at` current. Cheap: by
+  default `status.json` lives in tmpfs so this costs zero SD wear.
+</ParamField>
+
+<ParamField path="PIMYWA_BATTERY_LOG_FILE" type="string" default="/opt/pimywa/data/battery_log.csv">
+  Path to the discharge/charge trace CSV appended to by the power adapter. The
+  core only reads this file (`GET /api/battery/log`) — it never writes it.
+  Uses the same variable name on both the Go and Python sides for consistency.
+</ParamField>
+
+<ParamField path="PIMYWA_FACE_FILE" type="string" default="/run/pimywa/face.json">
+  Path to the face sidecar written by the display adapter. The display adapter
+  writes the live kaomoji face here; the core merges it into `status.json` on
+  its heartbeat. Lives in tmpfs by default.
+</ParamField>
+
+---
+
+## Auto-reply bridge
+
+<ParamField path="PIMYWA_BRIDGE" type="string" default="none">
+  AI bridge plugin for the auto-reply worker. `none` disables auto-drafting
+  (chats in `auto` mode receive no automatic reply until a plugin is chosen).
+  `direct-api` uses the DeepSeek API.
+</ParamField>
+
+<ParamField path="PIMYWA_DEEPSEEK_KEY" type="string" default="">
+  DeepSeek API key. Secret — never logged, never exposed in the agent's MCP
+  context. Required when `PIMYWA_BRIDGE=direct-api`.
+</ParamField>
+
+<ParamField path="PIMYWA_DEEPSEEK_ENDPOINT" type="string" default="https://api.deepseek.com">
+  DeepSeek API base URL. Override to point at a compatible proxy or local model.
+</ParamField>
+
+<ParamField path="PIMYWA_DEEPSEEK_MODEL" type="string" default="deepseek-chat">
+  DeepSeek model name to use for auto-reply drafts.
+</ParamField>
+
+<ParamField path="PIMYWA_BRIDGE_BUDGET" type="integer" default="100">
+  Hard cap on total bridge API calls. Once reached the bridge stops calling the
+  API entirely — an anti-runaway-cost circuit breaker, not a soft warning.
+</ParamField>
+
+<ParamField path="PIMYWA_AUTOREPLY_INTERVAL" type="duration" default="5m">
+  How often the auto-reply worker sweeps pending auto-mode chats for new
+  messages that need a draft response.
+</ParamField>
+
+<ParamField path="PIMYWA_AUTOREPLY_DELAY" type="duration" default="3s">
+  Pacing between successive bridge API calls within a single sweep. This is
+  courtesy rate-limiting against a paid API, not a WhatsApp anti-ban delay.
+</ParamField>
+
+---
+
+## Misc
+
+<ParamField path="PIMYWA_SWAMPED_AT" type="integer" default="8">
+  Queue depth at which the resting mood switches from `few` to `swamped`.
+  Messages 1 through `PIMYWA_SWAMPED_AT` give the `few` mood; more than that
+  gives `swamped`.
+</ParamField>
+
+<ParamField path="PIMYWA_AGENT_IDLE" type="duration" default="120s">
+  How long the MCP server waits with no tool calls from a session before it
+  clears that session's `agent_connected` state.
+</ParamField>
+
+<ParamField path="PIMYWA_HOSTNAME" type="string" default="">
+  Override for the mDNS/footer hostname shown in `status.json` and the
+  dashboard. When empty, the OS hostname with `.local` appended is used.
+</ParamField>
+
+<ParamField path="PIMYWA_WIFI_IFACE" type="string" default="wlan0">
+  Network interface queried for the current SSID via `iw dev <iface> link`.
+  Adjust for boards that use a different interface name (e.g. `wlp2s0` or
+  `wlan1` with a USB dongle).
+</ParamField>
+
+<ParamField path="PIMYWA_DECISION_POLICY" type="string" default="/opt/pimywa/decision-policy.md">
+  Path to the editable decision-policy Markdown file. The MCP server loads this
+  at runtime — edit it live without recompiling. If the file does not exist,
+  the server falls back to its embedded default policy.
+</ParamField>

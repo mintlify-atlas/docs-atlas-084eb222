@@ -1,0 +1,141 @@
+---
+title: "Piumy Architecture: Switchboard, MCP, and Adapters"
+sidebarTitle: "Architecture"
+description: "How Piumy's Go switchboard, Python adapters, MCP interface, and external AI brain connect together — with data contracts, ports, and component boundaries."
+---
+
+Piumy is distributed by design. The ARM64 board has one job — route and store WhatsApp messages — and it does that job in Go with minimal memory. The AI agent lives on a separate machine with RAM and connects over MCP. This page explains the component boundaries, data contracts, and anti-ban principles that hold the system together.
+
+<Note>
+  The switchboard does not reply — it routes and stores.
+</Note>
+
+## Components
+
+Piumy is made up of four distinct components. Each has a clear boundary and communicates with its neighbors only through the contracts described below.
+
+### Core (`pimywa`, Go binary)
+
+The core is the heart of the switchboard. It is a single, lightweight Go binary that owns all of the following responsibilities:
+
+- **WhatsApp gateway** — connects to WhatsApp Web (via [`whatsmeow`](https://github.com/tulir/whatsmeow)), receives and stores inbound messages, and dispatches outbound messages after governor approval.
+- **SQLite store** — persists messages, contacts, per-chat state (mode, memory, context, rules), and outbox with retry/backoff and a dead-letter queue.
+- **Router** — applies a per-number whitelist and per-chat rules. Chats run in either `auto` mode (cheap API draft) or `advanced` mode (full agent queue).
+- **Anti-ban governor** — enforces per-minute and per-day send rate limits, adds human-paced delays between reads and sends, and provides a kill-switch mute. Rate limits have a safe ceiling — they can only be loosened to a configured maximum, never tightened past the anti-ban floor.
+- **MCP server** — exposes the message queue and control tools to the external agent over streamable HTTP (`:8081`). Fail-closed: every request is rejected until a bearer token is configured.
+- **REST API** — lightweight HTTP API on `:8080` for scripts, `curl`, and the dashboard. Optionally gated by `X-API-Key`.
+- **Web dashboard** — a LAN-only, login-protected web UI on `:80` that shows the live face, battery chart, WhatsApp link/QR, anti-ban mute, per-chat rules, rate limits, and router/whitelist settings.
+
+### Display adapter (Python)
+
+The display adapter is a Python process that runs independently of the core. It reads `status.json` on a polling interval and renders a pwnagotchi-style kaomoji face. Three backends are supported:
+
+- `file` — writes `display.png` (250×122 px, 1-bit). Used for development on any PC.
+- `epaper-waveshare` — pushes 1-bit pixels to the physical e-paper panel over SPI.
+- `none` — disables rendering; useful when no display is attached.
+
+The eye engine rotates through three eye types and twelve gaze directions. The face reacts to moods (a new message, the agent connecting, the battery draining) and settles into a calm idle when the board is quiet. After writing each rendered face, the adapter writes a `face.json` sidecar so the core can reflect the current kaomoji string back into `status.json`.
+
+### Power adapter (Python)
+
+The power adapter is a Python process that reads the CW2015 fuel gauge chip over I2C. It runs a self-calibrating discharge curve — learning this specific pack's real full-to-empty voltage span from actual discharges — and writes a `battery.json` sidecar with the linearized level, voltage, charging state, and adaptive time-remaining. The core merges this sidecar into `status.json` on every heartbeat tick. Backends: `cw2015-i2c` and `none`.
+
+### External AI agent (any MCP client)
+
+The AI agent never runs on the board. It is any process that speaks the Model Context Protocol: Claude Code, OpenCode, or a custom script. The agent connects to the MCP server on `:8081` using a bearer token, reads the message queue, makes decisions, and calls tools like `send_message` or `escalate`. The governor validates every outbound action before it reaches WhatsApp.
+
+## Data contracts
+
+The components communicate exclusively through two seams. There are no direct function calls or shared memory across process boundaries.
+
+### `status.json` — core ↔ display adapter
+
+The core is the **single writer** of `status.json`. It writes atomically (tmp file + rename) so the display adapter never reads a half-written file. The core's heartbeat ticker merges in battery, face, CPU, RAM, and uptime on every tick — the power adapter and display adapter never write to `status.json` directly; they each write a dedicated sidecar file that the core reads and merges.
+
+`status.json` carries:
+
+| Field | Description |
+|---|---|
+| `mood` | Current state machine mood (e.g. `responding`, `thinking`, `ai_online`) |
+| `wa_connected` | Whether the WhatsApp session is live |
+| `show_qr` | Whether to render the pairing QR |
+| `queue` | Pending messages waiting for agent action |
+| `sent` | All-time outbound message count |
+| `battery` | Linearized battery level (%) from `battery.json` sidecar |
+| `voltage` | Raw cell voltage (mV) |
+| `charging` | Whether the battery is currently charging |
+| `time_remaining` | Adaptive minutes remaining, from the CW2015 curve |
+| `face` | Current kaomoji string from `face.json` sidecar |
+| `wifi` | Wi-Fi signal strength |
+| `ssid` | Connected network name |
+| `hostname` | Board hostname |
+| `ip` | LAN IP address |
+| `cpu` | CPU usage (%) from `/proc` |
+| `ram` | RAM usage (%) from `/proc` |
+| `uptime` | Seconds since the core started |
+
+The path is configurable via `PIMYWA_STATUS` (default: `/tmp/pimywa-status.json`). Because it lives in tmpfs, every write is zero-SD-wear by design.
+
+### MCP / HTTP (`:8081`) — core ↔ external agent
+
+The external agent connects to the core's MCP server over streamable HTTP. Authentication is bearer-token only — the `PIMYWA_MCP_KEY` environment variable. The endpoint is fail-closed: if no token is configured, every request is rejected with an error, not passed through anonymously.
+
+The agent uses MCP tools to:
+- Read chats and messages (`list_chats`, `get_messages`)
+- Pull and claim the advanced-mode queue
+- Send replies via the governor (`send_message`)
+- Escalate, set per-chat modes, adjust routing (`escalate`, `set_mode`)
+- Reset the dashboard password (`reset_dashboard_password`)
+
+The MCP anti-flood guard (`mcpguard`) enforces a separate rate limit on inbound tool calls — distinct from the governor's outbound send limit — to prevent a misbehaving agent from flooding the board.
+
+### `battery.json` sidecar — power adapter → core
+
+The power adapter is the **single writer** of `battery.json`. It writes its reading there; the core reads it on the heartbeat tick and merges the values into `status.json`. The core never reads I2C directly. This single-writer rule prevents any race condition on `status.json`.
+
+### `face.json` sidecar — display adapter → core
+
+After each render, the display adapter writes the current kaomoji string to `face.json`. The core reads this sidecar on the same heartbeat tick that reads `battery.json` and merges `face` into `status.json`. Again, the display adapter never writes to `status.json` directly.
+
+## Ports and addresses
+
+| Port | Service | Auth |
+|---|---|---|
+| `:8081` | MCP server (streamable HTTP) | Bearer token (`PIMYWA_MCP_KEY`) — fail-closed |
+| `:8080` | REST API | Optional `X-API-Key` header (`PIMYWA_API_KEY`) |
+| `:80` | Web dashboard | Login required (`PIMYWA_DASH_USER` / `PIMYWA_DASH_PASS`) |
+
+All ports are configurable via environment variables: `PIMYWA_MCP_ADDR`, `PIMYWA_DASH_ADDR` (for the REST API), and the dashboard address. All three are LAN-only by default. For remote access, a WireGuard tunnel is the recommended path.
+
+## The anti-ban golden rules
+
+WhatsApp actively detects and bans accounts that behave like automation. Piumy's governor encodes these rules into the system and makes them structural — not advisory.
+
+**The AI never runs on the board.** The board has no RAM budget for inference and no direct path to compose messages. All replies are authored by the external agent and must pass through the governor before being sent.
+
+**The governor enforces rate limits and delays.** Every outbound message goes through the governor, which enforces a per-minute bucket and a per-day cap. Human-paced delays (configurable min/max) are inserted between marking a message read, showing the typing action, and sending. The caps survive restarts — the core reconstructs today's sent count from the message store at boot, so a crash-loop can never blow past the daily anti-ban limit.
+
+**The board never initiates.** The switchboard only sends messages in response to incoming ones or to explicit agent actions. It never starts a conversation unprompted.
+
+**Rate limits can only be loosened to a safe ceiling.** The dashboard exposes rate limit sliders, but the REST API enforces hard ceilings (30 per minute, 2 000 per day). No configuration change can tighten the delays past the anti-ban floor or remove them entirely.
+
+## Full flow diagram
+
+```
+WhatsApp (dedicated number)
+      │
+      ▼
+  SWITCHBOARD (Go, tiny board) ── e-paper (Python adapter) → face
+   · receives / stores (SQLite)     └ reads status.json
+   · per-chat mode: auto | advanced
+   · anti-ban governor · whitelist
+   · exposes MCP ──────────────┐
+        │ auto                 │ advanced (queue, pull)
+        ▼                      ▼
+   cheap API             AGENT over MCP (another machine with RAM)
+   (optional)             Claude / Opus / OpenCode + tools
+```
+
+<Warning>
+  The MCP endpoint on `:8081` is fail-closed: it rejects every request until `PIMYWA_MCP_KEY` is set. An open MCP endpoint has no trust boundary — any tool, including owner-scoped ones like `reset_dashboard_password`, would be reachable by anyone on the LAN.
+</Warning>

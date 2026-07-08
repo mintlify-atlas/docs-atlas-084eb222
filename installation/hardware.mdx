@@ -1,0 +1,129 @@
+---
+title: "Hardware Setup and Wiring for Piumy"
+sidebarTitle: "Hardware"
+description: "Reference boards, peripheral wiring, GPIO pin assignments, and instructions for porting Piumy to a new ARM64 board. Uses only generic Linux interfaces — no vendor-locked libraries."
+---
+
+Piumy touches hardware exclusively through generic Linux kernel interfaces: `spidev` (`/dev/spidev*`) for the e-paper display, `libgpiod` (`/dev/gpiochip*`) for GPIO lines (panel reset, data/command, busy, and physical buttons), and `i2c-dev` (`/dev/i2c-*`) for the CW2015 battery gauge. There are no vendor-locked HAT libraries and no hardcoded pin numbers — every bus address, chip select, and pin assignment is a config value in the env file. If something cannot be configured, that is a portability bug.
+
+<Note>
+  All pins are config, not hardcoded — everything is in the env file. If something cannot be configured, that is a portability bug.
+</Note>
+
+## Reference Boards
+
+| Board | RAM | Role |
+|---|---|---|
+| Raspberry Pi Zero 2 W | 512 MB | Switchboard + e-paper (main target, only board in active use) |
+| Raspberry Pi 3 A+ | 512 MB | Spare / portability test target |
+
+The AI agent (Claude, OpenCode, or any MCP client) connects to the switchboard over MCP from a separate machine with more RAM. **The AI never runs on the e-paper board** — that board only routes, stores, and draws.
+
+## Peripherals
+
+### E-Paper Display
+
+**Waveshare e-paper 2.13" V4** — 122×250 pixels physical resolution, rendered as 250×122 and rotated 90° in software. Driven over SPI via the `epaper-waveshare` display adapter backend. Connected to BCM pins 8/10/11/17/24/25 (SPI0: MOSI/CLK/CE0 plus DC/RST/BUSY).
+
+Set `PIMYWA_DISPLAY=epaper-waveshare` in the env file to activate it. Use `PIMYWA_DISPLAY=none` for a headless install, or `PIMYWA_DISPLAY=file` during development to generate a PNG without any panel attached.
+
+### Battery / UPS
+
+**UPS-Lite with CW2015 fuel gauge** — connected on I2C bus 1, address `0x62`. The power adapter reads voltage and state-of-charge, writes `/run/pimywa/battery.json` (tmpfs), and the core merges the reading into `status.json` on its heartbeat interval.
+
+Set `PIMYWA_POWER_BACKEND=cw2015-i2c` to enable it, or `none` to disable. The I2C bus and address are also configurable:
+
+```bash
+PIMYWA_POWER_BACKEND=cw2015-i2c
+PIMYWA_POWER_I2C_BUS=1
+PIMYWA_POWER_I2C_ADDR=0x62
+```
+
+## Enabling SPI + I2C
+
+On Raspberry Pi OS, add these two lines to `/boot/firmware/config.txt` (the installer does this automatically):
+
+```text
+dtparam=spi=on
+dtparam=i2c_arm=on
+```
+
+Also ensure the `i2c-dev` kernel module loads at boot:
+
+```bash
+echo 'i2c-dev' | sudo tee -a /etc/modules
+```
+
+A reboot is required for these changes to take effect. On other ARM64 boards, use the equivalent device-tree overlay for your platform.
+
+## GPIO Pin Assignments
+
+The e-paper panel occupies BCM 8/10/11 (SPI0: MOSI/CLK/CE0) plus BCM 17 (DC), BCM 24 (RST), and BCM 25 (BUSY). The CW2015 uses BCM 2/3 (I2C1: SDA/SCL). The remaining free lines are used for the three physical controls:
+
+| Control | BCM | 40-pin header | Nearby GND |
+|---|---|---|---|
+| "Connect" push-button | GPIO 5 | Pin 29 | Pin 30 |
+| Kill switch | GPIO 6 | Pin 31 | Pin 34 |
+| Shutdown push-button | GPIO 13 | Pin 33 | Pin 39 |
+
+**Wiring:** connect each GPIO pin to one side of the button or switch; connect the other side to the adjacent GND pin listed above. No external resistors are needed — each line uses the Pi's internal pull-up (set via a `libgpiod` bias flag). Idle reads HIGH; pressed/closed reads LOW (active-low). An optional 0.1 µF capacitor across the contacts can help if a button bounces.
+
+The kill switch is wired so that **open/floating = HIGH = muted**. A cut wire fails safe — the bot stops sending but stays connected.
+
+<Note>
+  Before wiring, verify your exact e-paper HAT variant doesn't already use BCM 5, 6, or 13 for its own buttons. Check its schematic. Some HATs route their own controls to those pins.
+</Note>
+
+## Physical Controls
+
+Three momentary or maintained controls are read by the button adapter (Python via `libgpiod`, debounced, never `RPi.GPIO`):
+
+- **"Connect" push-button (momentary)** — context-aware. If WhatsApp is not yet linked, pressing it displays the WhatsApp QR code on the e-paper so you can scan it with your phone. If already linked, it shows the agent pairing pinpass. Only someone with physical access to the board can trigger this.
+
+- **Kill switch (maintained)** — gates whether the bot sends replies (`POST /api/killswitch`). The switch stays connected and continues receiving messages regardless of position. It is read as **set-to-position** (open = muted, closed = replying), not toggle, so a dashboard change never inverts the physical switch's polarity. The switch is authoritative — a dashboard toggle is reverted on the next hardware read. All anti-ban systems run regardless; this only gates outbound responses.
+
+- **Shutdown push-button (long-press ~2–3 s)** — triggers a clean `poweroff`. The e-paper shows the **sleeping** face as a safe-to-unplug indicator. The dashboard provides the same action, and the power adapter can trigger it automatically on critically low battery.
+
+If the button adapter cannot read a control on boot (GPIO error or hardware fault), the kill switch defaults to **muted** — the bot never replies by accident.
+
+## Porting to a New ARM64 Board
+
+Piumy is board-agnostic in its core. Everything board-specific lives in the adapters and the env file. To bring up Piumy on a new ARM64 board:
+
+<Steps>
+  <Step title="Install ARM64 Linux and enable SPI/I2C">
+    Install a 64-bit Linux distribution and enable SPI and I2C using the board's device-tree overlay or equivalent mechanism. Verify `/dev/spidev*` and `/dev/i2c-*` devices appear after a reboot.
+  </Step>
+
+  <Step title="Set bus and pin config in the env file">
+    In `/opt/pimywa/pimywa.env`, set the SPI device, the `gpiochip` path, reset/DC/busy pin numbers, and the I2C bus number and address for your board's wiring:
+
+    ```bash
+    PIMYWA_POWER_I2C_BUS=1
+    PIMYWA_POWER_I2C_ADDR=0x62
+    # (display SPI device, gpiochip, and pin assignments are set in the display adapter config)
+    ```
+  </Step>
+
+  <Step title="Choose adapter backends">
+    Set the display and power backends in the env file. Use `none` or `file` if the hardware is not yet connected:
+
+    ```bash
+    PIMYWA_DISPLAY=epaper-waveshare   # or: none | file
+    PIMYWA_POWER_BACKEND=cw2015-i2c   # or: none
+    ```
+  </Step>
+
+  <Step title="Build the core and run the adapters">
+    Build the Go core for your target architecture and start the Python adapters:
+
+    ```bash
+    cd core
+    GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o pimywa .
+    ```
+  </Step>
+
+  <Step title="Verify with the file backend first">
+    Before connecting the real e-paper panel, set `PIMYWA_DISPLAY=file`. The display adapter writes a `display.png` you can inspect on your PC, confirming the rendering pipeline works without any panel attached. Switch to `epaper-waveshare` once you're ready to wire up the hardware.
+  </Step>
+</Steps>

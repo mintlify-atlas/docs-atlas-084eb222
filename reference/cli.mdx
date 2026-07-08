@@ -1,0 +1,203 @@
+---
+title: "pimywa CLI Reference: Commands and Subcommands"
+sidebarTitle: "CLI"
+description: "Complete reference for the pimywa binary: serve, state, seed, auth setup, auth rotate, and restore-session. Every command, flag, and environment variable documented."
+---
+
+The `pimywa` binary is the Piumy switchboard. It exposes six subcommands: `serve` (the main server), `state` (write a mood to status.json), `seed` (insert demo data), `auth setup`, `auth rotate`, and `restore-session`. All runtime configuration is passed through `PIMYWA_*` environment variables — there are no global flags on the binary itself.
+
+```bash
+pimywa [serve | state <mood> | seed | restore-session [--force] <file> | auth <setup|rotate> [--env-file <path>]]
+```
+
+---
+
+## pimywa serve
+
+Start the full Piumy switchboard. When `PIMYWA_GATEWAY=whatsmeow` (the default for production installs), the process connects to WhatsApp on startup. It then brings up three listening servers:
+
+| Server | Default address | Env var |
+|---|---|---|
+| MCP (streamable HTTP) | `:8081` | `PIMYWA_MCP_ADDR` |
+| REST API | `:8080` | `PIMYWA_API_ADDR` |
+| Dashboard | `:80` | `PIMYWA_DASH_ADDR` |
+
+There are no flags — all configuration comes from environment variables.
+
+```bash
+# Production: reads PIMYWA_GATEWAY from the environment file
+/opt/pimywa/pimywa serve
+
+# Development / no WhatsApp connection
+PIMYWA_GATEWAY=none pimywa serve
+```
+
+<Note>
+When `PIMYWA_GATEWAY=none`, the switchboard starts without connecting to WhatsApp. The MCP server, REST API, and dashboard are all fully operational — useful for local development or when testing with seeded data.
+</Note>
+
+**Graceful shutdown.** Send `SIGINT` or `SIGTERM` to stop the process cleanly. On receipt of either signal, `serve` will:
+
+1. Set the mood to `sleeping` (updates status.json, so the e-paper face reacts).
+2. Disconnect from WhatsApp cleanly via `whatsmeow`.
+3. Clear the session lock file so a subsequent `restore-session` does not find a stale lock.
+4. Wait up to 3 seconds for in-flight HTTP requests to finish before exiting.
+
+---
+
+## pimywa state \<mood\>
+
+Write a mood directly to `status.json`. Useful for testing the display adapter without running the full switchboard — you can drive every face expression from the command line.
+
+**Argument:** `<mood>` — required.
+
+Valid values:
+
+```
+idle  zero  new_msg  few  swamped  thinking  working  responding
+ai_online  vip  sleeping  alert  error  qr
+```
+
+The path written to is controlled by the `PIMYWA_STATUS` environment variable.
+
+```bash
+pimywa state responding
+pimywa state qr
+pimywa state idle
+```
+
+<Tip>
+Combine `pimywa state` with the display adapter's `render.py` script to preview every face expression without any hardware or WhatsApp connection. Cycle through moods in a loop to produce a visual reference sheet.
+</Tip>
+
+---
+
+## pimywa seed
+
+Insert demo data into the SQLite database: two fake chats with one message each, using Chilean phone numbers as JIDs. Useful for testing the REST API and MCP tools without a real WhatsApp connection.
+
+There are no flags.
+
+```bash
+# Seed the database, then start the server in no-gateway mode
+pimywa seed
+PIMYWA_GATEWAY=none pimywa serve
+```
+
+The database path is controlled by the `PIMYWA_DB` environment variable. Running `seed` more than once is safe — it calls `AddMessage` with fixed IDs, so duplicate rows are silently ignored by the store layer.
+
+---
+
+## pimywa auth setup
+
+Generate and persist `PIMYWA_MCP_KEY` if no key is already configured. The command is idempotent: if `PIMYWA_MCP_KEY` is already present and non-empty in the env file it prints `"already configured"` and exits without changing anything.
+
+The token is a 64-character hex string (32 bytes of `crypto/rand` entropy). It is printed to stdout **exactly once** — it is never re-displayable after this invocation.
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--env-file <path>` | `/opt/pimywa/pimywa.env` | Path to the env file where `PIMYWA_MCP_KEY` is written. |
+
+```bash
+# First-time setup (standard install path)
+sudo pimywa auth setup
+
+# Custom env file location
+sudo pimywa auth setup --env-file /path/to/custom.env
+```
+
+After running, the command prints the exact JSON snippet to paste into your MCP client config (Claude Code / OpenCode's `.mcp.json`):
+
+```json
+{"mcpServers": {"piumy": {"url": "http://<host>:8081/mcp",
+  "headers": {"Authorization": "Bearer <token>"}}}}
+```
+
+<Note>
+Save the printed token immediately — in a password manager or directly into your `.mcp.json`. It is stored in the env file as `PIMYWA_MCP_KEY` and never written to git. After setup, restart `pimywa-core` for the token to take effect:
+
+```bash
+sudo systemctl restart pimywa-core
+```
+</Note>
+
+---
+
+## pimywa auth rotate
+
+Always generate a **new** `PIMYWA_MCP_KEY`, replacing any existing one. Unlike `auth setup`, this command is not idempotent — it unconditionally overwrites the current key and immediately invalidates every MCP client configured with the old token.
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--env-file <path>` | `/opt/pimywa/pimywa.env` | Path to the env file where `PIMYWA_MCP_KEY` is written. |
+
+```bash
+sudo pimywa auth rotate
+sudo systemctl restart pimywa-core
+```
+
+The new token is printed to stdout exactly once, in the same `.mcp.json` snippet format as `auth setup`.
+
+<Warning>
+Rotating invalidates **all** existing MCP clients immediately. Any agent, Claude Code instance, or OpenCode session using the old token will start receiving `401 Unauthorized` responses as soon as `pimywa-core` is restarted. Update every `.mcp.json` with the new token before restarting the service.
+</Warning>
+
+---
+
+## pimywa restore-session \[--force\] \<file\>
+
+Decrypt a session backup and replace the live WhatsApp session database. This command is **manual and deliberate only** — it is never called automatically and is not wired to any REST or MCP endpoint.
+
+**Arguments:**
+
+| Argument | Description |
+|---|---|
+| `<file>` | Path to the encrypted backup file (required). |
+
+**Flags:**
+
+| Flag | Description |
+|---|---|
+| `--force` | Override the live-process check. Dangerous — only use this if you are certain `pimywa serve` is not running. |
+
+**Prerequisites** (the command validates all of these before touching anything):
+
+- `PIMYWA_BACKUP_KEY` must be set — it is the decryption key for the backup.
+- `PIMYWA_SESSION_DB` must point to the live session file that will be replaced.
+- `pimywa serve` must **not** be running — detected via a lock file written by `serve` at startup and cleared on clean shutdown.
+
+```bash
+sudo systemctl stop pimywa-core
+sudo pimywa restore-session /opt/pimywa/data/backups/wa_session_2024-01-01.enc
+sudo systemctl start pimywa-core
+```
+
+<Warning>
+Never run `restore-session` while `pimywa serve` is running. The command checks for a live process and refuses unless `--force` is passed. Restoring while the gateway is active can corrupt the session database and force a full WhatsApp re-link. If the lock file is stale (left behind by a crash), inspect the system process list yourself before reaching for `--force`.
+</Warning>
+
+---
+
+## Building the binary
+
+```bash
+# Build for the current platform
+cd core && go build -o pimywa .
+
+# Cross-compile for Raspberry Pi (arm64) from macOS/Linux
+GOOS=linux GOARCH=arm64 go build -o pimywa-arm64 .
+```
+
+The core has no CGO dependencies — it uses `modernc.org/sqlite` (pure Go), so cross-compilation works without a cross-compiler toolchain.
+
+---
+
+## Environment variables
+
+All runtime configuration is provided through `PIMYWA_*` environment variables. On a standard install these are loaded by systemd from `/opt/pimywa/pimywa.env` before the binary starts — the binary itself only reads already-exported env vars via `config.Load()`.
+
+See the [Environment Variables reference](/reference/env-vars) for the full list of variables, their defaults, and valid ranges.

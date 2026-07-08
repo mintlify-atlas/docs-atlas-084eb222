@@ -1,0 +1,105 @@
+---
+title: "router.json: Whitelist and Routing Configuration"
+sidebarTitle: "router.json"
+description: "The router.json file controls which phone numbers are whitelisted and how their messages are routed. Supports exact JID matches and wildcards, with mode and plugin overrides."
+---
+
+`router.json` is the whitelist and routing table for Piumy. It controls two things: which phone numbers are allowed to reach the switchboard at all (the inbound gate), and how matched numbers' messages are routed once through (mode and bridge plugin). Its path is set via `PIMYWA_ROUTER` (default `router.json`). The file is loaded at startup — to apply changes, restart `pimywa-core`. The in-memory router can also be inspected and mutated live via `GET /api/router` and `POST /api/router/whitelist`.
+
+<Warning>
+  `router.json` is gitignored — it may contain real phone numbers. Never commit
+  it to version control.
+</Warning>
+
+## Example
+
+The following is the annotated example from `core/router.example.json`:
+
+```json
+{
+  "_comment": "Copy to router.json and adjust. router.json is gitignored (it may contain real phone numbers).",
+  "allow_all": false,
+  "default_mode": "advanced",
+  "whitelist": [
+    "56999999999@s.whatsapp.net"
+  ],
+  "routes": [
+    {
+      "match": "56999999999@s.whatsapp.net",
+      "mode": "advanced",
+      "plugin": "mcp-agent",
+      "model": "claude-opus-4-8"
+    },
+    {
+      "match": "*",
+      "mode": "advanced",
+      "plugin": "none",
+      "model": ""
+    }
+  ]
+}
+```
+
+In this example:
+- Only `56999999999@s.whatsapp.net` can send messages through the gateway (`whitelist`).
+- That specific number is routed to `advanced` mode with the `mcp-agent` plugin.
+- The wildcard `"*"` route is a catch-all for any number that somehow passes the whitelist — here it also goes to `advanced` mode with no plugin.
+- All numbers not in the whitelist are silently dropped at the gateway level before routing is even consulted.
+
+## Fields reference
+
+<ParamField body="allow_all" type="boolean" default="false">
+  If `true`, all inbound numbers bypass the `whitelist` check entirely — any
+  number can send messages through the gateway. **Leave this `false` in
+  production.** It exists for development and testing only.
+</ParamField>
+
+<ParamField body="default_mode" type="string">
+  The routing mode applied to numbers that pass the whitelist but are not
+  matched by any entry in `routes`. Either `auto` (bridge-driven auto-reply)
+  or `advanced` (queued for an MCP agent).
+</ParamField>
+
+<ParamField body="whitelist" type="array of strings">
+  Phone JIDs in `number@s.whatsapp.net` format. Only these numbers pass the
+  inbound gateway filter — all other numbers are dropped before any routing
+  logic runs. Managed live via `POST /api/router/whitelist`.
+</ParamField>
+
+<ParamField body="routes" type="array of objects">
+  Ordered list of routing rules. Routes are evaluated in order; the **first
+  match wins**. Each route object has the following fields:
+
+  - **`match`** (string) — Exact JID (`56999999999@s.whatsapp.net`) or the
+    wildcard string `"*"` which matches any JID. A wildcard route at the end
+    acts as a catch-all default.
+  - **`mode`** (string) — `auto` or `advanced`. Overrides `default_mode` for
+    matched numbers.
+  - **`plugin`** (string) — The bridge plugin for `auto` mode: `none` (no
+    auto-reply drafting) or `direct-api` (DeepSeek bridge). Ignored when
+    `mode` is `advanced`.
+  - **`model`** (string) — Model name recorded in the chat's `last_model`
+    field (informational; used by the dashboard to show which model replied).
+    Empty string if not applicable.
+</ParamField>
+
+## JID format
+
+WhatsApp JIDs are phone numbers in international format **without** the leading `+`, suffixed with the server:
+
+| Type | Format | Example |
+|------|--------|---------|
+| Individual | `<number>@s.whatsapp.net` | `56999999999@s.whatsapp.net` |
+| Group | `<number>@g.us` | `120363000000000001@g.us` |
+
+Use the international dialing code followed by the subscriber number, no spaces or dashes. For Chile (+56): `56912345678@s.whatsapp.net`.
+
+## Per-chat rules vs. routing
+
+`router.json` is the **inbound gate** — it decides whether a message enters the system at all. What the agent is allowed to say in response is a separate concern: per-chat behavior rules are set via the dashboard or `POST /api/chats/rules`. For `send_message` to work, **both** conditions must be true: the number must be whitelisted in `router.json` AND the chat must have effective rules configured.
+
+<Tip>
+  Adding a number to the whitelist does not automatically grant it a reply
+  policy. Set the chat's rules (and optionally its route's plugin) to give the
+  AI guidance on how to respond.
+</Tip>

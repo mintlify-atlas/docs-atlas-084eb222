@@ -1,0 +1,100 @@
+---
+title: "MCP Tools Overview: All 23 Piumy Tools"
+sidebarTitle: "Overview"
+description: "Piumy exposes 23 MCP tools for AI agents to read chats, manage the queue, send replies, and perform admin operations. The endpoint is fail-closed — requires a bearer token."
+---
+
+Piumy exposes its MCP server on port `8081` using the streamable HTTP transport. All 23 tools are authenticated — every request must include a valid bearer token via the `Authorization: Bearer` header. The endpoint is **fail-closed**: if `PIMYWA_MCP_KEY` is not configured, every request is rejected with `{"error":"unauthorized"}`. There is no "open by default" mode.
+
+## Authentication
+
+Pass the bearer token in your MCP client configuration. The canonical format (for Claude Code, OpenCode, and any client that supports `.mcp.json`) is:
+
+```json
+{
+  "mcpServers": {
+    "piumy": {
+      "url": "http://piumy.local:8081/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-token>"
+      }
+    }
+  }
+}
+```
+
+For clients that can only configure a bare URL, the token is also accepted as a `?key=` query parameter — but the `Authorization` header is the primary method.
+
+Generate or rotate the token on the device:
+
+```bash
+sudo /opt/pimywa/pimywa auth setup   # generates + saves one if none exists (idempotent)
+sudo /opt/pimywa/pimywa auth rotate  # always generates a NEW one, invalidating the old
+```
+
+Both commands print the exact client config snippet to paste into your MCP client. The token is shown **once** — save it to a password manager immediately. It is stored in `/opt/pimywa/pimywa.env` as `PIMYWA_MCP_KEY` and never committed to git.
+
+<Note>
+  After running `pimywa auth rotate`, restart the service for the new token to take effect: `sudo systemctl restart pimywa-core`.
+</Note>
+
+See [MCP Auth Setup](/guides/mcp-auth) for the full walkthrough.
+
+## Tool categories
+
+| Category | Tools |
+|---|---|
+| Status & info | `get_status` |
+| Chat management | `list_chats`, `get_chat`, `get_pending`, `set_chat_status`, `set_chat_active`, `set_chat_memory`, `set_chat_context`, `resolve_chat`, `get_chat_groups`, `claim_chat`, `release_chat` |
+| Message management | `get_messages`, `get_queue`, `get_outbox`, `get_media`, `get_drafts`, `send_message`, `mark_handled` |
+| Escalation & mode | `set_mode`, `escalate`, `get_decision_policy` |
+| Admin (owner-only) | `reset_dashboard_password` |
+
+## The operating loop
+
+The standard agent loop, derived from the [Piumy skill definition](https://github.com/chamilonster/Piumy/blob/main/skill/piumy/SKILL.md):
+
+1. **`get_pending`** — fetch chats where `last_speaker` is `"them"` (the contact has the last word and is waiting for a reply). These are *candidates*, not a to-do list. Judge each by date and relevance — you are not obligated to reply to all of them.
+
+2. **`get_chat` / `get_messages`** — read the chat's full record (mode, status, memory, context, effective rules) and its recent message history to understand what needs a response.
+
+3. **`get_decision_policy`** — **required before every `send_message` call**. Returns the policy text (the rules the agent must follow when deciding whether and how to reply) and a `policy_version` SHA-256 hash. A stale or missing `policy_version` is rejected by `send_message` outright.
+
+4. **`send_message`** — queue the reply for delivery over WhatsApp. Requires `to` (full JID, e.g. `56999999999@s.whatsapp.net`), `message`, `model` (the agent's identity string), and `policy_version` (the exact hash from step 3). The governor dispatches it with anti-ban pacing — it is not sent instantly.
+
+5. **`mark_handled`** — mark the queue entry done once the reply has been sent (for advanced-mode chats).
+
+<Note>
+  The agent must **not** always have the last word. If `last_speaker` is already `"us"`, do not reply again. Over-replying is an explicit bug the server is designed to discourage.
+</Note>
+
+## Anti-flood protection
+
+The MCP server runs an anti-flood guard (`mcpguard`) that applies to every tool call, per MCP session. Default limits (all configurable via the dashboard at `/api/mcp-guard` without a restart):
+
+| Limit | Default |
+|---|---|
+| General tool calls | 120 / minute |
+| Emit tools (`send_message`, `escalate`) | 20 / minute |
+| Consecutive throttled calls to trip circuit breaker | 5 |
+| Circuit-breaker block duration | 5 minutes |
+
+When a session trips the circuit breaker (5 consecutive throttled calls), all further calls are rejected with a `blocked: try again after <timestamp>` error until the cooldown expires. A successful call resets the consecutive-throttle streak.
+
+<Warning>
+  The emit-tool limit (20/min) is intentionally much stricter than the general limit. `send_message` and `escalate` cause real-world effects — a buggy agent sending at full speed trips this limit well before it reaches the general cap.
+</Warning>
+
+## Detailed reference
+
+<CardGroup cols={3}>
+  <Card title="Chat Tools" icon="comments" href="/reference/mcp/chat-tools">
+    `list_chats`, `get_chat`, `get_pending`, `set_chat_status`, `claim_chat`, and 7 more tools for browsing and managing the chat layer.
+  </Card>
+  <Card title="Message Tools" icon="paper-plane" href="/reference/mcp/message-tools">
+    `get_messages`, `send_message`, `get_queue`, `mark_handled`, and 6 more tools for the full message flow.
+  </Card>
+  <Card title="Admin Tools" icon="shield-halved" href="/reference/mcp/admin-tools">
+    `reset_dashboard_password` — the one owner-scoped MCP tool.
+  </Card>
+</CardGroup>

@@ -1,0 +1,141 @@
+---
+title: "Deploy Piumy on Raspberry Pi OS Lite 64-bit"
+sidebarTitle: "Raspberry Pi"
+description: "One-command install of Piumy on Raspberry Pi OS Lite 64-bit. Provisions the core, display, and power systemd services with power-loss resilience."
+---
+
+`deploy/install.sh` is a fully idempotent installer — safe to re-run on an existing install. It will upgrade the binary and migrate your env file (appending any new keys without touching the ones you already set), making it suitable for both fresh installs and in-place upgrades.
+
+<Warning>
+  Never pull power directly from a running Pi — use the shutdown button or `sudo poweroff`. SD corruption is the #1 cause of broken installs.
+</Warning>
+
+## Prerequisites
+
+Before running the installer, make sure you have:
+
+- A **Raspberry Pi Zero 2 W** (main target) or **Raspberry Pi 3 A+** (portability test)
+- **Raspberry Pi OS Lite 64-bit** flashed to the SD card (Bookworm / Debian trixie recommended)
+- **SSH access** to the Pi (or a keyboard/monitor attached)
+- An active **internet connection** on the Pi (for package installation)
+- The **`pimywa` binary** for `linux/arm64` — either pre-built on your PC and copied over, or built directly on the Pi if a Go toolchain is present
+
+## Quick Install
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone the Piumy repository onto the Pi (or onto your PC if you plan to cross-compile first):
+
+    ```bash
+    git clone https://github.com/chamilonster/Piumy.git
+    cd Piumy
+    ```
+  </Step>
+
+  <Step title="Build the binary">
+    The installer expects a `linux/arm64` binary at `core/pimywa`. You can build it directly on the Pi if Go is installed, or cross-compile on your PC and copy it over.
+
+    **Build on the Pi (requires Go):**
+    ```bash
+    cd core && go build -o pimywa .
+    ```
+
+    **Cross-compile on your PC (recommended for faster iteration):**
+    ```bash
+    cd core
+    GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o pimywa .
+    # Then copy the binary to the Pi:
+    scp pimywa pi@raspberrypi.local:~/Piumy/core/pimywa
+    ```
+
+    <Note>
+      If neither a pre-built binary nor a Go toolchain is found, the installer exits with an error. `CGO_ENABLED=0` is required for cross-compilation and is set automatically when the installer builds on-device.
+    </Note>
+  </Step>
+
+  <Step title="Run the installer">
+    Run the installer as root from the repository root on the Pi:
+
+    ```bash
+    sudo ./deploy/install.sh
+    ```
+
+    The installer accepts the following flags:
+
+    | Flag | Effect |
+    |---|---|
+    | `--reboot` | Automatically reboot at the end of installation |
+    | `--overlay` | Enable the read-only overlay root filesystem (strongest power-loss protection) |
+    | `--no-display` | Core only — skip e-paper display service |
+    | `--no-power` | Skip the CW2015 battery service |
+
+    Example — full install with automatic reboot and overlay root:
+
+    ```bash
+    sudo ./deploy/install.sh --reboot --overlay
+    ```
+
+    After the installer finishes it prints the dashboard URL, REST and MCP addresses, and instructions for retrieving the generated MCP auth token.
+  </Step>
+
+  <Step title="Check service status">
+    Verify that all three systemd services are active:
+
+    ```bash
+    systemctl status pimywa-core pimywa-display pimywa-power
+    ```
+
+    All three should show `active (running)`. If `--no-display` or `--no-power` was passed, only the installed services will appear.
+  </Step>
+
+  <Step title="Follow the logs">
+    Stream the switchboard core logs in real time:
+
+    ```bash
+    journalctl -u pimywa-core -f
+    ```
+
+    On first boot, look for the line `random password` — that is the auto-generated dashboard password (printed once, then never again). Save it, or set `PIMYWA_DASH_PASS` in the env file and restart the service.
+  </Step>
+</Steps>
+
+## What the Installer Does
+
+`install.sh` performs the following steps in order (all idempotent):
+
+1. **Package installation** — installs `python3-pil`, `python3-spidev`, `python3-libgpiod` (or `python3-gpiod`), `python3-qrcode`, `python3-smbus2`, `fonts-dejavu-core`, `avahi-daemon`, and `zram-tools` via `apt-get`. Falls back to `pip3` for packages that aren't in the distro's repository.
+
+2. **SPI + I2C** — appends `dtparam=spi=on` and `dtparam=i2c_arm=on` to `/boot/firmware/config.txt` (or `/boot/config.txt` on older images) if not already present. Also adds `i2c-dev` to `/etc/modules`.
+
+3. **Hardware watchdog** — enables `dtparam=watchdog=on` and sets `RuntimeWatchdogSec=15` in `/etc/systemd/system.conf` so the Pi hard-reboots if the OS hangs.
+
+4. **Journald cap** — writes `/etc/systemd/journald.conf.d/pimywa.conf` to keep logs volatile (RAM) with a 50 MB cap, avoiding unnecessary SD card writes.
+
+5. **zram swap** — configures `/etc/default/zramswap` (lz4, 50% RAM) and enables `zramswap.service` so swap never touches the SD card.
+
+6. **tmpfs runtime dir** — provisions `/run/pimywa` via `tmpfiles.d` for `status.json`, `battery.json`, and `face.json` (all RAM, zero SD wear).
+
+7. **File installation** — copies the binary to `/opt/pimywa/pimywa`, the display adapter to `/opt/pimywa/display/`, and the power adapter to `/opt/pimywa/power/`.
+
+8. **Env file at `/opt/pimywa/pimywa.env`** — creates the file on a fresh install, or migrates it on upgrade by appending only the keys that are missing, never overwriting keys you have already set (your `PIMYWA_API_KEY` and `PIMYWA_MCP_KEY` are always preserved).
+
+9. **MCP auth token** — runs `pimywa auth setup --env-file /opt/pimywa/pimywa.env` to generate and save a bearer token if none exists yet. The token is printed once to stdout — save it to your MCP client config.
+
+10. **systemd services** — installs and enables `pimywa-core.service`, and optionally `pimywa-display.service` and `pimywa-power.service`. All services load `/opt/pimywa/pimywa.env` via `EnvironmentFile=`.
+
+11. **avahi** — enables `avahi-daemon` so the Pi is reachable at `http://<hostname>.local/`.
+
+12. **Overlay root (optional)** — if `--overlay` was passed, enables the read-only overlayfs via `raspi-config nonint enable_overlayfs`. The data directory `/opt/pimywa/data` must be on a writable mount when the overlay is active.
+
+## After Installation
+
+Once the services are running, your next steps are:
+
+<CardGroup cols={2}>
+  <Card title="Connect WhatsApp" icon="whatsapp" href="/guides/connecting-whatsapp">
+    Set `PIMYWA_GATEWAY=whatsmeow` in the env file, restart `pimywa-core`, and scan the QR code from the dashboard.
+  </Card>
+  <Card title="Connect an AI Agent (MCP)" icon="robot" href="/guides/mcp-auth">
+    Paste the MCP bearer token into your MCP client config to give Claude or any MCP-capable agent access to the switchboard.
+  </Card>
+</CardGroup>

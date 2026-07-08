@@ -1,0 +1,221 @@
+---
+title: "status.json Data Contract: Core to Display Adapter"
+sidebarTitle: "status.json Contract"
+description: "The status.json file is the data contract between the Piumy core and the display adapter. The core is the only writer; the display adapter reads it to render the kaomoji face."
+---
+
+`status.json` is the seam between the Go core and the Python display adapter. The core writes it **atomically** (write to a temp file, then rename) on every event and on a regular heartbeat. The display adapter polls it by `mtime` and re-renders the face whenever the file has changed. This design means the two processes never share memory, never block each other, and survive restarts independently.
+
+Never write to `status.json` from anything other than the core — doing so will cause race conditions and corrupt the display state.
+
+<Note>
+  `status.json` lives in tmpfs by default (`/run/pimywa/`). It is zero SD
+  wear. The path is configurable via `PIMYWA_STATUS`.
+</Note>
+
+## Single-writer rule
+
+The core is the **only writer** of `status.json`. Two other sidecars exist for processes that need to contribute data without violating the single-writer rule:
+
+| File | Writer | What it contains |
+|------|--------|-----------------|
+| `battery.json` (`PIMYWA_BATTERY_FILE`) | Power adapter | Voltage, raw percentage, charging state |
+| `face.json` (`PIMYWA_FACE_FILE`) | Display adapter | The kaomoji string that was just rendered |
+
+The core merges both sidecars into `status.json` on each heartbeat (`PIMYWA_STATUS_HEARTBEAT`, default 15s). A stale or missing sidecar produces `null` for its fields — never a placeholder or stale value.
+
+## Fields reference
+
+<ResponseField name="mood" type="string" required>
+  Face family enum. The core sets this from events; the display adapter maps it
+  to a pool of kaomoji variants and animates within that pool without
+  re-deriving semantic meaning from other fields.
+
+  **Transient moods** (set briefly ~4 seconds, then revert to the queue-derived
+  resting mood): `reading`, `switching`, `thinking`, `working`, `responding`,
+  `done`, `new_msg`, `ai_online`, `vip`
+
+  **Resting moods** (derived from queue depth): `zero` (empty queue), `few`
+  (1–`PIMYWA_SWAMPED_AT` messages), `swamped` (more than `PIMYWA_SWAMPED_AT`)
+
+  **System moods** (highest priority — override everything, including transient
+  events): `error`, `qr`, `sleeping`, `muted`, `paused`
+
+  **Catch-all:** `idle`, `alert`
+</ResponseField>
+
+<ResponseField name="speech" type="string">
+  Short chatter line displayed under the face (pwnagotchi-style). The display
+  adapter may rotate its own idle chatter when this field is empty.
+</ResponseField>
+
+<ResponseField name="queue" type="integer">
+  Number of advanced-mode messages waiting for an agent. Drives the resting
+  mood bucket: `0` → `zero`, `1..N` → `few`, `>N` → `swamped` (where N is
+  `PIMYWA_SWAMPED_AT`, default 8).
+</ResponseField>
+
+<ResponseField name="last_msg" type="string">
+  Short preview of the most recent inbound message. May be empty.
+</ResponseField>
+
+<ResponseField name="wa_connected" type="boolean">
+  `true` when the WhatsApp gateway has an active connection to WhatsApp's
+  servers.
+</ResponseField>
+
+<ResponseField name="show_qr" type="boolean">
+  `true` when the display should render the linking QR code on screen. The
+  mood will also be `qr` while this is `true`.
+</ResponseField>
+
+<ResponseField name="qr_data" type="string | null">
+  Raw QR payload string when `mood` is `qr`. `null` otherwise. The dashboard
+  renders this via `GET /api/qr.svg`; the display adapter draws it directly on
+  the e-paper.
+</ResponseField>
+
+<ResponseField name="battery" type="integer | null">
+  Linearized battery percentage (0–100), or `null` if the power adapter sidecar
+  is missing or stale. This is the **linearized** estimate from the power
+  adapter's adaptive model — not the raw voltage-curve percentage, which appears
+  jumpy on LiPo cells. See `voltage` for the raw reading.
+</ResponseField>
+
+<ResponseField name="voltage" type="integer | null">
+  Real cell voltage in millivolts, or `null` if unavailable. Sourced from the
+  `battery.json` sidecar.
+</ResponseField>
+
+<ResponseField name="charging" type="boolean">
+  `true` when the power adapter's estimator has inferred that the battery is
+  charging — either because the cell voltage is rising or the level has been
+  pinned at 100% for a sustained period. Drives the charging-bolt icon.
+</ResponseField>
+
+<ResponseField name="time_remaining" type="integer | null">
+  Adaptive estimate of battery minutes remaining, or `null` if unknown. Starts
+  as a theoretical estimate (capacity / draw) and is replaced with a
+  learned discharge rate once sufficient samples exist. While charging, this
+  represents the estimate *if unplugged right now*, not a time-to-full
+  countdown.
+</ResponseField>
+
+<ResponseField name="cpu" type="integer | null">
+  1-minute load average scaled to 0–100 by CPU core count, or `null` on
+  non-Linux hosts. Read from `/proc/loadavg`.
+</ResponseField>
+
+<ResponseField name="ram" type="integer | null">
+  Used RAM percentage (`(MemTotal - MemAvailable) / MemTotal × 100`), or `null`
+  on non-Linux hosts. Read from `/proc/meminfo`.
+</ResponseField>
+
+<ResponseField name="wifi" type="integer | null">
+  WiFi signal level on a 0–4 scale (0 = not connected), or `null` if
+  unknown. Derived from `iw dev <iface> link` output.
+</ResponseField>
+
+<ResponseField name="ip" type="string">
+  Current LAN IP address as a string, or an empty string when offline.
+</ResponseField>
+
+<ResponseField name="hostname" type="string">
+  mDNS/host name shown in the footer, e.g. `piumy.local`. Controlled by
+  `PIMYWA_HOSTNAME` (defaults to OS hostname + `.local`).
+</ResponseField>
+
+<ResponseField name="ssid" type="string">
+  Current WiFi network name, or an empty string when unknown or not connected.
+  Read via `iw dev <iface> link` using the interface configured by
+  `PIMYWA_WIFI_IFACE`.
+</ResponseField>
+
+<ResponseField name="own_jid" type="string | null">
+  The switchboard's own WhatsApp JID when connected (e.g.
+  `56999999999@s.whatsapp.net`). `null` when not linked or not connected.
+</ResponseField>
+
+<ResponseField name="agent_connected" type="boolean">
+  `true` while at least one MCP agent session is considered connected (i.e.
+  has made a tool call within the last `PIMYWA_AGENT_IDLE` window). Kept for
+  compatibility with older readers; mirrors `agents > 0`.
+</ResponseField>
+
+<ResponseField name="agents" type="integer">
+  Count of MCP sessions currently considered connected. `0` means no agent
+  is active. An agent session becomes inactive after `PIMYWA_AGENT_IDLE`
+  (default 120 seconds) with no tool calls.
+</ResponseField>
+
+<ResponseField name="uptime" type="integer">
+  Seconds since this core process started. This is the process uptime, **not**
+  the OS uptime.
+</ResponseField>
+
+<ResponseField name="reconnect_paused" type="boolean">
+  `true` when the anti-ban governor has paused reconnection after too many
+  consecutive failures. The mood is `paused` while this is `true` — distinct
+  from `sleeping`, which is a peaceful idle state.
+</ResponseField>
+
+<ResponseField name="muted" type="boolean">
+  `true` when the kill switch is on. All outbound sends are rejected while
+  muted — both `send_message` via MCP and `POST /api/send`. Toggle via
+  `POST /api/killswitch`.
+</ResponseField>
+
+<ResponseField name="sent" type="integer">
+  All-time count of successfully sent outbound messages (pwnagotchi-style
+  `SENT n` footer stat). Derived from the message history, not a separately
+  incremented counter.
+</ResponseField>
+
+<ResponseField name="face" type="string | null">
+  The literal kaomoji string the display adapter last rendered for the current
+  mood, e.g. `(◕‿◕)`. Merged from the `face.json` sidecar. `null` when the
+  display adapter is not running, hasn't rendered yet, or the mood is `qr`
+  (no kaomoji is drawn in QR mode). Lets the dashboard mirror the e-paper face
+  without duplicating the display adapter's face-selection catalog.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string" required>
+  UTC RFC3339 timestamp of the last write to this file, e.g.
+  `"2026-03-15T14:22:05Z"`. Can be used to detect stale reads — if this is
+  older than `PIMYWA_STATUS_HEARTBEAT` × 2, the core may have stopped.
+</ResponseField>
+
+## Example
+
+A realistic `status.json` payload from a connected device with a few messages waiting:
+
+```json
+{
+  "mood": "few",
+  "speech": "3 waiting",
+  "queue": 3,
+  "last_msg": "hey are you there?",
+  "wa_connected": true,
+  "show_qr": false,
+  "qr_data": null,
+  "battery": 82,
+  "voltage": 3940,
+  "charging": false,
+  "time_remaining": 210,
+  "cpu": 14,
+  "ram": 47,
+  "wifi": 3,
+  "ip": "192.168.1.42",
+  "hostname": "piumy.local",
+  "ssid": "HomeWifi",
+  "own_jid": "56999999999@s.whatsapp.net",
+  "agent_connected": true,
+  "agents": 1,
+  "uptime": 7230,
+  "reconnect_paused": false,
+  "muted": false,
+  "sent": 312,
+  "face": "(◕‿◕)",
+  "updated_at": "2026-03-15T14:22:05Z"
+}
+```

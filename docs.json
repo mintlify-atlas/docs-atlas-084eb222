@@ -1,72 +1,107 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "Piumy",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
-  },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "primary": "#2D6A4F",
+    "light": "#52B788",
+    "dark": "#1B4332"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/chamilonster/Piumy"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/chamilonster/Piumy"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Installation",
+            "pages": [
+              "installation/raspberry-pi",
+              "installation/hardware",
+              "installation/configuration"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/switchboard",
+              "concepts/router",
+              "concepts/governor",
+              "concepts/e-paper-face"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/connecting-whatsapp",
+              "guides/mcp-auth",
+              "guides/connecting-ai-agent",
+              "guides/dashboard",
+              "guides/session-backup"
+            ]
+          },
+          {
+            "group": "Adapters",
+            "pages": [
+              "adapters/display",
+              "adapters/power"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "MCP Tools",
+            "pages": [
+              "reference/mcp/overview",
+              "reference/mcp/chat-tools",
+              "reference/mcp/message-tools",
+              "reference/mcp/admin-tools"
+            ]
+          },
+          {
+            "group": "REST API",
+            "pages": [
+              "reference/rest/overview",
+              "reference/rest/endpoints"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/env-vars",
+              "reference/router-json",
+              "reference/status-contract"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "reference/cli"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

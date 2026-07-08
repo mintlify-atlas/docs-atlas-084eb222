@@ -1,0 +1,175 @@
+---
+title: "Display Adapter: E-Paper and File Backends"
+sidebarTitle: "Display Adapter"
+description: "The Piumy display adapter reads status.json and renders the kaomoji face. Supports three backends: file (PNG, for development), epaper-waveshare, and none."
+---
+
+The display adapter (`adapters/display/service.py`) is a Python service that polls `status.json` and renders the pwnagotchi-style kaomoji face. It runs as the `pimywa-display` systemd service on the Pi, or as a one-shot script for development. The service never freezes — it drives a dynamic idle animation ticker that keeps the face alive between real status changes, lerping from a fast post-interaction cadence back to a slow, low-power idle blink as quiet time accumulates.
+
+## Backends
+
+Three backends are available. Select one with the `PIMYWA_DISPLAY` environment variable.
+
+### `file`
+
+Renders the face to a PNG file (path controlled by `PIMYWA_DISPLAY_OUT`, default `display.png`). No hardware required. Use this backend on a development PC to preview every mood, test layout changes, and verify the full face catalog before touching a real panel.
+
+### `epaper-waveshare`
+
+Drives the **Waveshare 2.13" V4** e-paper panel via `spidev` and `libgpiod` directly — no Waveshare vendor SDK or `waveshare_epd` Python package is needed. The epd2in13\_V4 register protocol is implemented entirely in `epaper/backend.py`. On a Raspberry Pi, this is the production backend.
+
+### `none`
+
+No output. The service starts and runs its status-polling loop normally, but nothing is sent to any display. Use this for headless operation where the binary must run (e.g. to keep the `face.json` sidecar updated) but no physical panel exists.
+
+## Installation
+
+<Steps>
+  <Step title="Enable SPI on the Pi">
+    Add to `/boot/firmware/config.txt` and reboot:
+
+    ```
+    dtparam=spi=on
+    ```
+  </Step>
+
+  <Step title="Install system packages">
+    ```bash
+    sudo apt update && sudo apt install -y \
+        python3-pip python3-pil python3-gpiod python3-spidev fonts-dejavu-core
+    ```
+
+    `fonts-dejavu-core` installs `DejaVuSans.ttf` at `/usr/share/fonts/truetype/dejavu/`. The renderer bundles its own copy in `adapters/display/fonts/` and tries that first, so font rendering is identical on a dev PC and on the Pi.
+  </Step>
+
+  <Step title="Install Python packages">
+    ```bash
+    cd adapters/display
+    pip install -r requirements.txt
+    ```
+
+    Or with a venv (recommended for the Pi):
+
+    ```bash
+    python3 -m venv /opt/pimywa/venv
+    /opt/pimywa/venv/bin/pip install -r requirements.txt
+    ```
+
+    `requirements.txt` requires `Pillow>=10` and `qrcode[pil]>=7`. The `qrcode` dependency is only exercised when the core sets `mood=qr`.
+  </Step>
+
+  <Step title="Configure the systemd unit">
+    Example unit at `/etc/systemd/system/pimywa-display.service`:
+
+    ```ini
+    [Unit]
+    Description=Pimywa display service
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=pi
+    EnvironmentFile=/opt/pimywa/.env
+    Environment=PIMYWA_DISPLAY=epaper-waveshare
+    Environment=PIMYWA_STATUS=/opt/pimywa/data/status.json
+    ExecStart=/opt/pimywa/venv/bin/python /opt/pimywa/adapters/display/service.py
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+  </Step>
+</Steps>
+
+## Running the file backend (development)
+
+The `file` backend lets you render any mood to a PNG on a dev PC without any hardware. The standalone script lives in `adapters/display/file/`:
+
+```bash
+cd adapters/display/file
+pip install -r requirements.txt
+python render.py   # → display.png
+```
+
+`render.py` reads `PIMYWA_STATUS` to find `status.json`. Set a mood first using the core:
+
+```bash
+go run . state responding
+```
+
+Then re-run `render.py` to see the updated face. The output path defaults to `display.png`; override it with `PIMYWA_DISPLAY_OUT`.
+
+## Environment variables
+
+All knobs are env-driven (zero hardcode). Set them in `/opt/pimywa/.env` (loaded via the systemd `EnvironmentFile=` directive) or export them directly for development.
+
+### Service / animator
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_STATUS` | `/opt/pimywa/data/status.json` | Path to `status.json` the core writes |
+| `PIMYWA_DISPLAY` | `file` | Backend: `file` \| `epaper-waveshare` \| `none` |
+| `PIMYWA_DISPLAY_OUT` | `display.png` | Output PNG path (file backend only) |
+| `PIMYWA_POLL_INTERVAL` | `2.0` | Seconds between `status.json` mtime checks |
+| `PIMYWA_ANIM_FAST_SEC` | `2.0` | Fast idle-tick right after a status change |
+| `PIMYWA_ANIM_SLOW_SEC` | `18.0` | Slow idle-tick after `PIMYWA_ANIM_RAMP_SEC` of quiet |
+| `PIMYWA_ANIM_RAMP_SEC` | `60.0` | Seconds of quiet to ramp FAST → SLOW |
+| `PIMYWA_LOW_BATT` | `15` | Battery % below which idle animation is 4x slower |
+| `PIMYWA_SLEEP_ON_EXIT` | `1` | Put e-paper to sleep on service exit (`0` to skip) |
+| `PIMYWA_LOG_LEVEL` | `INFO` | Python logging level (`DEBUG` \| `INFO` \| `WARNING` \| `ERROR`) |
+
+## E-paper hardware variables
+
+These variables configure the `epaper-waveshare` backend. The defaults match the Waveshare 2.13" V4 HAT wiring for a Raspberry Pi.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_EPAPER_RST_PIN` | `17` | BCM GPIO pin for RESET |
+| `PIMYWA_EPAPER_DC_PIN` | `25` | BCM GPIO pin for Data/Command |
+| `PIMYWA_EPAPER_BUSY_PIN` | `24` | BCM GPIO pin for BUSY |
+| `PIMYWA_EPAPER_PWR_PIN` | `18` | BCM GPIO pin for power enable (set to empty string to skip) |
+| `PIMYWA_EPAPER_GPIOCHIP` | `gpiochip0` | GPIO chip name or `/dev/` path |
+| `PIMYWA_EPAPER_SPI_DEV` | `/dev/spidev0.0` | SPI device path |
+| `PIMYWA_EPAPER_SPI_SPEED` | `4000000` | SPI clock speed in Hz |
+| `PIMYWA_EPAPER_GHOST_PARTIALS` | `40` | Full refresh every N partials (anti-ghosting); `0` = disabled |
+
+### GPIO pin mapping (Waveshare 2.13" HAT defaults)
+
+| Signal | BCM GPIO | HAT pin | Env var |
+|--------|----------|---------|---------|
+| RST | 17 | 11 | `PIMYWA_EPAPER_RST_PIN` |
+| DC | 25 | 22 | `PIMYWA_EPAPER_DC_PIN` |
+| BUSY | 24 | 18 | `PIMYWA_EPAPER_BUSY_PIN` |
+| PWR | 18 | 12 | `PIMYWA_EPAPER_PWR_PIN` |
+| MOSI | 10 | 19 | (kernel SPI driver) |
+| SCLK | 11 | 23 | (kernel SPI driver) |
+| CS0 | 8 | 24 | `PIMYWA_EPAPER_SPI_DEV` |
+
+## Refresh policy
+
+The adapter minimizes panel flashing to preserve e-paper lifetime and avoid visual interruption.
+
+| Event | Refresh type | Notes |
+|---|---|---|
+| Boot | Full refresh | One-time init: `init()` + `Clear(0xFF)` + base image. Performed by the backend itself before the service loop starts. |
+| First content frame | Partial | Drawn from the known-blank boot baseline. |
+| Normal animation tick | Partial | No flash; only changed pixels update. |
+| Minor mood change | Partial | No flash. |
+| Major mood change | Full refresh (opt-in) | Entering or leaving `qr`, `error`, or `sleeping`. Gated by `PIMYWA_EPAPER_FULL_REFRESH` (default `0` / off). |
+| Identical image | Skipped entirely | No pointless partial update sent to the panel. |
+| Anti-ghosting | Full refresh | Fires automatically every `PIMYWA_EPAPER_GHOST_PARTIALS` partials (default 40) to clear accumulated ghost pixels. |
+
+<Warning>
+The `BUSY` pin driver polls until BUSY goes LOW. Some panel revisions may invert this polarity — if hardware init hangs, check the physical BUSY line.
+</Warning>
+
+## Face sidecar
+
+The display adapter writes the current kaomoji string to a `face.json` sidecar file (path controlled by `PIMYWA_FACE_FILE`, default `/run/pimywa/face.json`). The core merges it into `status.json` on its own heartbeat, so the web dashboard can mirror the live e-paper face without duplicating the face-selection logic.
+
+The sidecar is written atomically (write to `.tmp`, then `os.replace`) on every rendered frame. For mood `qr`, the panel shows a full-canvas QR code and no kaomoji face string is drawn; `face.json` reflects this with `"face": null`.
+
+<Tip>
+If the face appears sideways or upside-down on your panel, change the rotation angle in `epaper/backend.py`'s `image_to_buffer()`. The renderer produces a 250×122 landscape image which the backend rotates 90° CCW to portrait (122×250) before sending to the panel.
+</Tip>

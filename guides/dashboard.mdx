@@ -1,0 +1,107 @@
+---
+title: "Using the Piumy Web Dashboard"
+sidebarTitle: "Dashboard"
+description: "Piumy serves a lightweight web dashboard on LAN port 80. Manage WhatsApp linking, per-chat rules, rate limits, router config, and view battery charts from any browser."
+---
+
+The Piumy dashboard is served by the same Go binary as the switchboard core, on port 80 by default (configurable via `PIMYWA_DASH_ADDR`). It is designed for LAN-only access and requires a login. No build step, no external CDN — the entire UI is a few kilobytes of HTML and JS embedded directly in the binary.
+
+<Note>
+  The dashboard serves the live kaomoji face by merging the display adapter's `face.json` sidecar. If the display adapter is not running, the face shows as `null` in the Status section.
+</Note>
+
+## Accessing the dashboard
+
+Open your browser and navigate to:
+
+```
+http://piumy.local
+```
+
+If mDNS is not resolving on your network, use the Pi's IP address directly on port 80:
+
+```
+http://<pi-ip>
+```
+
+**Default credentials:**
+- Username: `admin`
+- Password: generated randomly at first startup and logged once. Retrieve it with:
+
+```bash
+journalctl -u pimywa-core | grep "generated random password"
+```
+
+To set a fixed password ahead of time, configure one of these environment variables in `pimywa.env`:
+
+| Variable | Description |
+|---|---|
+| `PIMYWA_DASH_PASS` | Plaintext password — hashed with bcrypt at startup |
+| `PIMYWA_DASH_PASS_HASH` | Pre-computed bcrypt hash — used as-is, no re-hashing |
+
+## Dashboard sections
+
+<CardGroup cols={2}>
+  <Card title="Status" icon="chart-line">
+    Live e-paper face mirrored from `face.json`, WhatsApp connection state, queue count, process uptime, and real-time CPU and RAM percentages from `/proc`.
+  </Card>
+  <Card title="Battery" icon="battery-half">
+    SVG chart of raw cell voltage alongside the linearised battery level, charging bands, and adaptive time-remaining estimate. Sourced from the power adapter's `battery.json` sidecar.
+  </Card>
+  <Card title="WhatsApp" icon="whatsapp">
+    Link and disconnect controls, QR code display for pairing a new device, and the current gateway connection status.
+  </Card>
+  <Card title="Anti-ban mute" icon="volume-xmark">
+    Toggle the kill switch. While muted, `send_message` (both REST and MCP) is rejected — no outbound messages leave the board until you unmute.
+  </Card>
+  <Card title="Settings" icon="sliders">
+    Adjust dispatch, read, and action delay ranges; media max size (MB). Delays can only be loosened past the env-configured floor — they cannot be tightened below the anti-ban defaults.
+  </Card>
+  <Card title="Rate limits" icon="gauge-high">
+    Set per-minute and per-day send caps. Ceilinged at 3× the default per-minute rate and 2 000 messages per day — edits survive a restart (stored in the KV store, not only in memory).
+  </Card>
+  <Card title="Router / Whitelist" icon="list-check">
+    Manage the router policy: allowed numbers, `allow_all` toggle, default chat mode, and per-number overrides. Changes take effect immediately without a restart.
+  </Card>
+  <Card title="Rules" icon="scroll">
+    Per-chat rules in the three-tier hierarchy: particular (per-chat), by type (1-to-1 / group), and the global default. The agent always sees the resolved effective value — the hierarchy is an owner-facing abstraction.
+  </Card>
+  <Card title="MCP anti-flood" icon="shield">
+    Tune the MCP guard thresholds: tool-call rate per minute, emit rate per minute, block threshold, and block cooldown. Protects the board from a misbehaving or runaway agent.
+  </Card>
+</CardGroup>
+
+## Password management
+
+If you lose the dashboard password, you have two options:
+
+**Option 1 — use the MCP `reset_dashboard_password` tool** (requires MCP auth to be configured):
+
+```
+reset_dashboard_password
+```
+
+Omit `new_password` to receive a randomly generated one. The new plaintext is returned exactly once in the tool response — save it immediately.
+
+**Option 2 — set `PIMYWA_DASH_PASS` in `pimywa.env`** and restart:
+
+```bash
+# In /opt/pimywa/pimywa.env
+PIMYWA_DASH_PASS=your-new-password
+```
+
+```bash
+sudo systemctl restart pimywa-core
+```
+
+A password reset via `reset_dashboard_password` writes a new bcrypt hash into the live KV store and takes effect immediately — no restart required.
+
+## Enable / disable the dashboard
+
+Set `PIMYWA_DASH` to `off` to disable the dashboard entirely:
+
+```bash
+PIMYWA_DASH=off
+```
+
+The default is `on`. When disabled, the binary skips starting the dashboard HTTP listener. The REST API (port 8080) and MCP server (port 8081) are unaffected.

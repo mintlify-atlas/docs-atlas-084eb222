@@ -1,0 +1,64 @@
+---
+title: "REST API Overview: Quick Access to Piumy Data"
+sidebarTitle: "Overview"
+description: "Piumy's REST API on port 8080 provides quick curl/script access to chats, messages, status, and settings — mirroring the MCP tools without requiring an MCP client."
+---
+
+Piumy serves a REST API on port `8080` (controlled by `PIMYWA_API_ADDR`) from the same binary as the MCP server. It's designed for quick access from curl, shell scripts, or the dashboard — no MCP client setup needed. Both the MCP server and REST API share the same store and in-memory state, so every read reflects the current live switchboard.
+
+## Authentication
+
+If `PIMYWA_API_KEY` is set, every `/api/*` request must include it via the `X-API-Key` header or the `?key=` query parameter:
+
+```bash
+# Via header (preferred — keeps the key out of proxy logs)
+curl http://piumy.local:8080/api/status -H "X-API-Key: <key>"
+
+# Via query param (convenient for EventSource / browser SSE)
+curl "http://piumy.local:8080/api/status?key=<key>"
+```
+
+The auth check is enforced on every `/api/*` path. The `/healthz` endpoint is always unauthenticated.
+
+<Warning>
+  An empty `PIMYWA_API_KEY` leaves the API completely open. This is acceptable
+  for local development but **never** for a production deployment. At minimum,
+  bind `PIMYWA_API_ADDR` to a loopback or private LAN interface rather than
+  `0.0.0.0` when running without a key.
+</Warning>
+
+## Base URL
+
+```
+http://<host>:8080
+```
+
+Replace `<host>` with your board's hostname (e.g. `piumy.local`) or IP address. The port is configurable via `PIMYWA_API_ADDR`; `:8080` is the default.
+
+## Endpoints summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/healthz` | Health check — no auth required |
+| GET | `/api/status` | Current switchboard status snapshot |
+| GET | `/api/chats` | List recent chats |
+| GET | `/api/messages` | Messages from a specific chat |
+| GET | `/api/queue` | Advanced-mode messages waiting for an agent |
+| POST | `/api/send` | Queue a message to send |
+| POST | `/api/mode` | Set a chat's mode (`auto` / `advanced`) |
+| POST | `/api/escalate` | Escalate a chat to advanced mode |
+| POST | `/api/handled` | Mark a message as handled |
+| GET | `/api/battery/log` | Discharge/charge trace (historical CSV rows) |
+| GET | `/api/events` | Server-sent events (SSE) stream |
+| GET | `/api/settings` | Current runtime settings |
+| POST | `/api/settings` | Update runtime settings |
+| GET | `/api/killswitch` | Kill switch (mute) state |
+| POST | `/api/killswitch` | Toggle the kill switch |
+| GET | `/api/backup` | Session backup status |
+| POST | `/api/backup` | Trigger a manual backup |
+| GET | `/api/router` | Current router config snapshot |
+
+<Tip>
+  For the full request/response shapes, parameter details, and curl examples for
+  each endpoint, see [REST API Endpoints](/reference/rest/endpoints).
+</Tip>

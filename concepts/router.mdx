@@ -1,0 +1,117 @@
+---
+title: "Routing Messages with router.json and Per-Chat Rules"
+sidebarTitle: "Router"
+description: "Piumy's router controls which phone numbers are whitelisted, their default mode, and per-number overrides for mode, plugin, and model. Configured in router.json."
+---
+
+The router decides which phone numbers are allowed to reach the switchboard and how their messages are handled. It reads from `router.json` at startup and on every hot-reload. The file path is set via `PIMYWA_ROUTER` (default `/opt/pimywa/router.json`). If the file does not exist, the router falls back to a safe default: whitelist-only, advanced mode, no routes.
+
+<Warning>
+  A number not in the whitelist never reaches the store — its messages are silently dropped at the gateway level. The agent will never see them.
+</Warning>
+
+## router.json structure
+
+Copy `core/router.example.json` to `router.json` and adjust for your numbers. The file is gitignored because it will contain real phone numbers.
+
+```json
+{
+  "allow_all": false,
+  "default_mode": "advanced",
+  "whitelist": [
+    "56999999999@s.whatsapp.net"
+  ],
+  "routes": [
+    {
+      "match": "56999999999@s.whatsapp.net",
+      "mode": "advanced",
+      "plugin": "mcp-agent",
+      "model": "claude-opus-4-8"
+    },
+    {
+      "match": "*",
+      "mode": "advanced",
+      "plugin": "none",
+      "model": ""
+    }
+  ]
+}
+```
+
+## Fields explained
+
+### Top-level fields
+
+**`allow_all`** (bool, default `false`)
+
+If `true`, every number is allowed to reach the switchboard regardless of whether it appears in the whitelist. This bypasses the primary anti-ban guard. Keep this `false` unless you have a specific reason to accept messages from unknown numbers — accepting unsolicited messages from the wider internet is a known ban trigger.
+
+**`default_mode`** (string, default `"advanced"`)
+
+The mode applied to any chat that is not matched by an explicit route entry. Valid values are `auto` (auto-reply worker handles it) and `advanced` (MCP agent queue). If unset or empty, the router defaults to `"advanced"`.
+
+**`whitelist`** (array of strings)
+
+The list of phone JIDs in `number@s.whatsapp.net` format that are allowed to send messages to the switchboard. A number not in this list is silently dropped before any storage or routing occurs. The whitelist is checked on every inbound message and takes effect immediately after a dashboard edit — no restart required.
+
+### Route fields
+
+Routes are evaluated in order. The first match wins. An exact JID match always beats a `"*"` wildcard, even if the wildcard appears earlier in the list.
+
+**`routes[].match`** (string)
+
+Either an exact JID (`"56999999999@s.whatsapp.net"`) or the catch-all wildcard `"*"`. Exact matches stop route evaluation immediately; a `"*"` match continues to be applied only if no prior exact match was found.
+
+**`routes[].mode`** (string)
+
+`"auto"` or `"advanced"`. Overrides `default_mode` for this specific match. Leave empty to inherit `default_mode`.
+
+**`routes[].plugin`** (string)
+
+Which bridge plugin handles auto-mode replies for this chat. Current values: `"mcp-agent"` (the connected MCP agent handles it), `"direct-api"` (a direct cheap-API call), or `"none"` (no auto-reply, messages just sit in the store). Irrelevant for `advanced` mode chats — the MCP agent handles those regardless.
+
+**`routes[].model`** (string)
+
+The model name recorded in the `last_model` field of each chat row after a reply is sent. This is metadata for the agent and dashboard — it does not control which model the agent actually uses. The agent's own model selection happens on the agent side.
+
+**`routes[].vip`** (bool, optional)
+
+If `true`, messages from this contact trigger the `vip` transient mood on the e-paper face instead of `new_msg`. Also marks the contact as VIP in the `resolve_chat` MCP tool response. A `"*"` wildcard route with `vip: true` makes every contact a VIP.
+
+## The MCP `resolve_chat` tool
+
+Before deciding how to handle a chat, an agent can call `resolve_chat` with the chat's JID to see the router's current decision for that number:
+
+```json
+{
+  "allowed": true,
+  "mode": "advanced",
+  "plugin": "mcp-agent",
+  "model": "claude-opus-4-8",
+  "vip": false,
+  "is_group": false
+}
+```
+
+This is useful in a skill that needs to confirm a contact is whitelisted before attempting to send, or to check whether a number is being handled in `auto` or `advanced` mode before escalating.
+
+## Per-chat rules
+
+Rules are separate from `router.json` and operate at a finer level of granularity. They contain the behavioral instructions the agent uses when responding to a specific chat — "like a skill". Rules are resolved through a three-tier hierarchy:
+
+1. **Per-chat rules** (`chats.rules`) — set via the dashboard or `REST PATCH /api/chats/:jid` for an individual contact. Highest priority.
+2. **By-type rules** — a default applied to all individual contacts, or to all groups, via the dashboard settings. Set via `REST POST /api/rules/type/individual` or `/group`.
+3. **Global default rules** — the catch-all for anything with neither per-chat nor by-type rules. Set via `REST POST /api/rules/default`.
+
+If no effective rules exist for a chat at the time `send_message` is called, the request is rejected with `"error: no rules on this chat"`. Rules must be set before the agent can send to a contact.
+
+Rules are read-only for MCP agents — an agent cannot rewrite the rules it is being evaluated against. Only the dashboard and privileged REST paths can set rules.
+
+<CardGroup cols={2}>
+  <Card title="Switchboard" icon="server" href="/concepts/switchboard">
+    How messages flow from WhatsApp to the MCP queue
+  </Card>
+  <Card title="Governor" icon="shield" href="/concepts/governor">
+    Rate limits, human-pacing delays, and the kill switch
+  </Card>
+</CardGroup>

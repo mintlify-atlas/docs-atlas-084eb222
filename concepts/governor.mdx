@@ -1,0 +1,88 @@
+---
+title: "Anti-Ban Governor: Rate Limits and Human Pacing"
+sidebarTitle: "Governor"
+description: "Piumy's governor enforces WhatsApp anti-ban protections: per-minute and per-day rate limits, randomized human-pacing delays, a mute/kill switch, and reconnect backoff."
+---
+
+The governor protects your WhatsApp account from being banned. It is always active — nothing in the send path bypasses it. Whether a reply comes from an MCP agent via `send_message` or from a human via the REST `POST /api/send` endpoint, it goes through the governor's outbox drain loop and all pacing rules apply equally.
+
+<Warning>
+  The anti-ban rules are non-negotiable. Never fight the governor or retry rejected sends in a loop — that is exactly what triggers a ban.
+</Warning>
+
+## Rate limits
+
+Two independent caps control how many messages can be sent. Both must be satisfied for a send to be allowed.
+
+**Per-minute cap** — `PIMYWA_RATE_LIMIT_PER_MIN` (default 10)
+
+A token-bucket limiter that refills at a rate of `max/60` tokens per second. When the bucket is empty, the outbox drain loop defers until tokens refill rather than sending in a burst. Editable at runtime via the dashboard without a restart. The dashboard enforces a ceiling of 30 messages per minute — the setting can only be tightened, never loosened past that ceiling.
+
+**Per-day cap** — `PIMYWA_RATE_LIMIT_PER_DAY` (default 500)
+
+A rolling calendar-day counter that resets at midnight local time. Editable at runtime via the dashboard. The dashboard ceiling is 2000 messages per day.
+
+**Survival across restarts** — On boot, the core reconstructs today's already-sent count by querying message history (`CountOutboundSince` with the start-of-day timestamp). A sudden power cut on the Pi never silently resets the daily counter to zero — the bot cannot exceed its daily limit just because it rebooted.
+
+## Human-pacing delays
+
+All three delay windows use a uniform-random duration within their bounds. The actual value is different for every single send, which is what makes the pattern look human.
+
+**Dispatch delay** — `PIMYWA_DELAY_DISPATCH_MIN` / `PIMYWA_DELAY_DISPATCH_MAX` (default 1 s – 5 s)
+
+Applied before each outbound message is sent. During this window the bot shows a composing presence indicator (typing dots) for a brief sub-window before sending, further mimicking human behavior.
+
+**Read delay** — `PIMYWA_DELAY_READ_MIN` / `PIMYWA_DELAY_READ_MAX` (default 2 s – 8 s)
+
+Applied before the gateway marks an inbound message as read (blue ticks). Read receipts reflect real agent attention — they are sent only when an agent actually retrieves the message via MCP, not when the gateway merely receives it.
+
+**Action delay** — `PIMYWA_DELAY_ACTION_MIN` / `PIMYWA_DELAY_ACTION_MAX` (default 1 s – 4 s)
+
+Applied before any other WhatsApp-server-facing action such as contact sync or group member fetch.
+
+All three windows are editable at runtime via the dashboard. The dashboard enforces a **floor**: delays can only be loosened (made longer), never tightened below their safe defaults. An agent cannot instruct the bot to send faster than the floor allows.
+
+## Kill switch / mute
+
+The kill switch silences all outbound sends instantly while leaving the bot connected and fully receiving.
+
+**Activating the mute**
+
+- Dashboard toggle: `POST /api/killswitch` with `{"muted": true}`.
+- Physical kill switch: a maintained push-button wired to GPIO 6. This is the authoritative source — a physical press is always honored, and a dashboard toggle is overridden on the next GPIO read if the physical switch disagrees.
+
+**Behavior while muted**
+
+The `send_message` MCP tool returns `"muted: message not sent"` immediately, with no silent queuing. The agent knows the send was rejected and can decide what to do. The e-paper face switches to the `muted` mood (Tier 3 — cannot be overridden by queue events or agent activity).
+
+**Safe default**
+
+If GPIO cannot be read at boot or returns an error, the governor defaults to **muted** rather than allowing sends. The system never replies "just in case" on an ambiguous hardware state.
+
+## Reconnect backoff
+
+The gateway manages its own reconnect loop with exponential backoff after connection failures, separate from the outbox rate limits.
+
+The backoff starts at 5 s and doubles on each consecutive failure, capped at 1 hour. After `PIMYWA_GATEWAY_MAX_FAILS` consecutive failures (default 5), the gateway stops retrying entirely and sets `reconnect_paused = true` in `status.json`. The e-paper mood becomes `"paused"` — distinct from the peaceful `"sleeping"` — making the ban-risk situation visible on the face. The dashboard shows a **Resume connection** button when the gateway is in this state.
+
+## MCP anti-flood guard
+
+The anti-flood guard is a separate layer that limits inbound tool calls from connected MCP agents. It protects the switchboard from a runaway agent flooding it with tool calls, independently of the WhatsApp send rate limits.
+
+| Setting | Default | Description |
+|---|---|---|
+| `PIMYWA_MCPGUARD_RATE_PER_MIN` | 120 | Maximum tool calls per minute across all general tools |
+| `PIMYWA_MCPGUARD_EMIT_RATE_PER_MIN` | 20 | Separate, tighter limit for emit tools (`send_message`, `escalate`) |
+| `PIMYWA_MCPGUARD_BLOCK_THRESHOLD` | — | Consecutive throttled calls that trigger a full circuit-breaker block |
+| `PIMYWA_MCPGUARD_BLOCK_COOLDOWN` | — | Duration of a full block once the threshold is hit |
+
+When a call is throttled, the tool returns an error immediately. When the circuit breaker fires, all tool calls from the offending agent are blocked for the cooldown duration. All four settings are editable at runtime via the dashboard.
+
+<CardGroup cols={2}>
+  <Card title="Switchboard" icon="server" href="/concepts/switchboard">
+    How the outbox is drained and retried
+  </Card>
+  <Card title="Router" icon="route" href="/concepts/router">
+    Whitelist and per-number routing rules
+  </Card>
+</CardGroup>

@@ -1,0 +1,225 @@
+---
+title: "MCP Message Tools: get_messages, send_message, get_queue"
+sidebarTitle: "Message Tools"
+description: "MCP tools for reading messages, pulling the advanced-mode queue, sending replies, checking the outbox, retrieving media, and marking messages as handled."
+---
+
+These tools handle the message flow — reading inbound messages, pulling the advanced-mode queue, sending replies through the anti-ban governor, and marking work done. The most critical tool here is `send_message`, which has several mandatory gates that must be satisfied before a message is queued.
+
+---
+
+## get_messages
+
+Returns recent messages from a chat.
+
+<ParamField query="chat_id" type="string" required>
+  Chat JID.
+</ParamField>
+
+<ParamField query="limit" type="number" default="20">
+  Maximum number of messages to return.
+</ParamField>
+
+**Returns** an array of message objects from the chat's history.
+
+<Note>
+  Retrieving messages via this tool is what marks inbound messages as **read on WhatsApp**. This is intentional — reads reflect real attention, not just the gateway having received them. The read receipt is sent with an anti-ban delay and is never instant. Do not call this tool in a tight loop expecting instant delivery confirmation.
+</Note>
+
+---
+
+## get_queue
+
+Returns incoming messages in advanced mode that are waiting for an agent to handle them.
+
+<ParamField query="limit" type="number" default="20">
+  Maximum number of queued messages to return.
+</ParamField>
+
+**Returns** an array of pending advanced-mode messages. Calling this tool also refreshes the `queue` count in `get_status`.
+
+---
+
+## get_decision_policy
+
+Returns the agent's decision policy — the set of rules that governs whether and how to reply to any chat. **You must call this before every `send_message` call.**
+
+**No parameters.**
+
+**Returns:**
+
+| Field | Description |
+|---|---|
+| `policy` | The full policy text (plain text, owner-editable without restart) |
+| `policy_version` | A SHA-256 hash of the current policy content |
+
+The `policy_version` value must be passed verbatim to `send_message`. If the owner has edited the policy since you last called `get_decision_policy`, the version hash will have changed and `send_message` will reject your call with `"stale/missing policy_version — call get_decision_policy first"`.
+
+<Warning>
+  Always call `get_decision_policy` immediately before `send_message` — even if you called it 30 seconds ago. The owner can edit the policy at any time without restarting the service, and a stale hash is an immediate rejection. There is no grace period.
+</Warning>
+
+---
+
+## send_message
+
+Queues a message to send over WhatsApp. The anti-ban governor dispatches it with human-paced timing — it is **not** sent instantly.
+
+<ParamField query="to" type="string" required>
+  Destination JID (e.g. `56999999999@s.whatsapp.net`). **Must be a full JID with `@`**, not a bare phone number. Copy it from `list_chats`, `get_queue`, or `resolve_chat` — do not construct it by hand.
+</ParamField>
+
+<ParamField query="message" type="string" required>
+  The text content to send.
+</ParamField>
+
+<ParamField query="model" type="string" required>
+  The agent's identity string. Every reply is attributed to this value, and it is checked against any active `claim_chat` lock on the destination chat.
+</ParamField>
+
+<ParamField query="policy_version" type="string" required>
+  The exact `policy_version` hash returned by `get_decision_policy`. Must match the current policy — call `get_decision_policy` first, every time.
+</ParamField>
+
+**Returns** `"queued for sending"` on success.
+
+### send_message gates
+
+Every call passes through a chain of checks, in order. All rejections return a clear error string — never a silent drop.
+
+<Warning>
+  **All six gates must pass** before a message is queued. A failure at any gate returns an error and the message is not enqueued.
+
+  1. **Muted check** — If `get_status` shows `muted: true`, `send_message` returns `"muted: message not sent"`. Stop — do not loop or retry. The mute is the owner's kill switch.
+
+  2. **Policy version check** — `policy_version` must exactly match the current hash from `get_decision_policy`. Stale or missing → rejected.
+
+  3. **JID format check** — `to` must contain `@`. A bare number (e.g. `56999999999`) is rejected with a message telling you to copy the JID from `list_chats` / `get_queue` / `resolve_chat`.
+
+  4. **Claim check** — If another model holds an unexpired `claim_chat` lock on this chat, the call is rejected with who holds it and until when.
+
+  5. **Effective rules check** — The chat must have effective rules (particular → type → global default). A chat with no rules at any tier is rejected with `"error: no rules on this chat"`. Rules are set by the owner only, never over MCP.
+
+  6. **Group status check** — If the destination is a WhatsApp group (`@g.us`) and its status is `"ignored"`, the call is rejected. The owner must explicitly un-ignore the group first.
+
+  7. **Router whitelist check** — The JID must be in the router whitelist. Rejected with `"refusing to send: <jid> is not in the whitelist (anti-ban)"`.
+</Warning>
+
+### Example tool call
+
+```json
+{
+  "tool": "send_message",
+  "arguments": {
+    "to": "56999999999@s.whatsapp.net",
+    "message": "Hola! Claro, te lo confirmo a la brevedad.",
+    "model": "claude-opus-4-5",
+    "policy_version": "a3f8d2e1c7b049..."
+  }
+}
+```
+
+The typical sequence is:
+
+```
+get_decision_policy  →  (read policy, save policy_version)
+get_chat             →  (confirm rules are set, check claimed_by)
+send_message         →  (pass policy_version, model, full JID)
+mark_handled         →  (for advanced-mode queue entries)
+```
+
+---
+
+## set_mode
+
+Changes a chat's mode.
+
+<ParamField query="chat_id" type="string" required>
+  Chat JID.
+</ParamField>
+
+<ParamField query="mode" type="string" required>
+  `auto` — the auto-reply API handles this chat, or `advanced` — an agent handles it over MCP.
+</ParamField>
+
+**Returns** `"mode updated to <mode>"` on success. Also refreshes the queue count.
+
+---
+
+## escalate
+
+Escalates a chat to `advanced` mode so a more capable agent or a human operator can take it. Use this whenever you're uncertain — when in doubt, escalate rather than guessing.
+
+<ParamField query="chat_id" type="string" required>
+  Chat JID.
+</ParamField>
+
+**Returns** `"escalated to advanced"` on success.
+
+<Tip>
+  `escalate` is a specialized shortcut for `set_mode` with `mode=advanced`. It also triggers the `thinking` mood on the e-paper display (a visual cue that a handoff is happening) and refreshes the queue count.
+</Tip>
+
+---
+
+## mark_handled
+
+Marks a queued advanced-mode message as handled. Call this after you have sent a reply (or decided not to reply) to a specific queue entry.
+
+<ParamField query="chat_id" type="string" required>
+  Chat JID.
+</ParamField>
+
+<ParamField query="message_id" type="string" required>
+  Message ID from the queue entry (returned by `get_queue`).
+</ParamField>
+
+**Returns** `"ok"` on success. Also triggers the `done` mood on the e-paper face and refreshes the queue count.
+
+---
+
+## get_outbox
+
+Returns messages that have been queued via `send_message` but have not yet been dispatched by the gateway.
+
+<ParamField query="limit" type="number" default="20">
+  Maximum number of outbox entries to return.
+</ParamField>
+
+**Returns** an array of pending outbox items.
+
+<Note>
+  `send_message` always returns `"queued for sending"` — it cannot tell you whether the gateway has actually delivered the message. Use `get_outbox` to check if a reply is still waiting to be sent (e.g. if the gateway is disconnected or the JID was malformed).
+</Note>
+
+---
+
+## get_media
+
+Returns images, videos, and stickers that have been downloaded from a chat, with their file paths on disk, MIME type, and file size.
+
+<ParamField query="chat_id" type="string" required>
+  Chat JID.
+</ParamField>
+
+<ParamField query="limit" type="number" default="20">
+  Maximum number of media entries to return.
+</ParamField>
+
+**Returns** an array of media records with file path, MIME type, and size.
+
+---
+
+## get_drafts
+
+Returns pending auto-reply drafts that are awaiting the owner's approval before being sent.
+
+<ParamField query="limit" type="number" default="20">
+  Maximum number of draft entries to return.
+</ParamField>
+
+**Returns** an array of pending draft records.
+
+<Note>
+  `get_drafts` is **read-only** over MCP. Approving or discarding a draft requires the privileged dashboard or REST API (`/api/drafts/approve` and `/api/drafts/discard`). An agent can see what the auto-reply worker has drafted, but cannot approve it.
+</Note>

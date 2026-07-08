@@ -1,0 +1,84 @@
+---
+title: "Link Piumy to Your WhatsApp Account"
+sidebarTitle: "Connect WhatsApp"
+description: "Link a WhatsApp number to Piumy by scanning the QR code from the dashboard or e-paper face. The session is saved in a local SQLite database."
+---
+
+Linking WhatsApp uses the same multidevice protocol your phone uses when you add a laptop or tablet. Piumy stores the resulting session credentials in a local SQLite file (`PIMYWA_SESSION_DB`). Use a **dedicated number** — do not route your personal number through the switchboard. Once linked, the board receives and stores all inbound messages silently; your AI agent reads and replies over MCP from a separate machine.
+
+<Warning>
+  Use a dedicated WhatsApp number — not your personal number. An account running an unofficial client carries ban risk. The governor enforces anti-ban protections, but they are not a guarantee.
+</Warning>
+
+## Enable the WhatsApp gateway
+
+By default `PIMYWA_GATEWAY` is `none`, which means the core starts without any WhatsApp connection. Set it to `whatsmeow` in your env file:
+
+```bash
+PIMYWA_GATEWAY=whatsmeow
+```
+
+Then restart the core service for the change to take effect:
+
+```bash
+sudo systemctl restart pimywa-core
+```
+
+## Steps to link
+
+<Steps>
+  <Step title="Open the dashboard">
+    Navigate to `http://piumy.local` in your browser (or use the Pi's IP address on port 80 if mDNS is not available on your network).
+  </Step>
+  <Step title="Start the link flow">
+    Find the **WhatsApp** section and click **Link**. The core initiates a new multidevice session.
+  </Step>
+  <Step title="Scan the QR code">
+    A QR code appears in the dashboard. On your phone, go to **WhatsApp → Settings → Linked Devices → Link a device** and scan it.
+  </Step>
+  <Step title="Confirm the connection">
+    Once the scan succeeds, the dashboard status changes to **connected** and the e-paper face shows the `idle` mood.
+  </Step>
+  <Step title="Session persists automatically">
+    The session is saved to `PIMYWA_SESSION_DB` immediately after linking. It persists across restarts — you do not need to scan again unless the session is explicitly removed or corrupted.
+  </Step>
+</Steps>
+
+## From the CLI
+
+You can also start the gateway directly from the terminal without the dashboard. Run the core with the gateway flag set:
+
+```bash
+PIMYWA_GATEWAY=whatsmeow /opt/pimywa/pimywa serve
+```
+
+The QR code is printed in the terminal if no display adapter is running, and also rendered on the e-paper face (mood `qr`) if the display adapter is active.
+
+## QR timeout
+
+The QR code expires after `PIMYWA_QR_TIMEOUT` (default **180 seconds**). If you don't scan in time, stop the core, then restart it to generate a fresh QR:
+
+```bash
+sudo systemctl stop pimywa-core
+sudo systemctl start pimywa-core
+```
+
+## Disconnecting
+
+To remove the device from your WhatsApp account, use the **Disconnect** button in the dashboard's WhatsApp section. Alternatively, call the REST API directly:
+
+```bash
+curl -X DELETE http://piumy.local:8080/api/gateway -H "X-API-Key: <key>"
+```
+
+This delinks the device from WhatsApp. The session database file is left in place but will be invalid for future connections until you link again.
+
+## Device name
+
+`PIMYWA_WA_DEVICE` (default `"Piumy"`) controls the label shown in **WhatsApp Settings → Linked Devices** on your phone. You can set it to something less conspicuous:
+
+```bash
+PIMYWA_WA_DEVICE="Chrome (Windows)"
+```
+
+This only affects future pairings — it is sent to WhatsApp at link time. Already-linked sessions are not changed retroactively.

@@ -1,0 +1,98 @@
+---
+title: "The Piumy Switchboard: Route, Store, Never Reply"
+sidebarTitle: "Switchboard"
+description: "The Piumy switchboard receives and stores every WhatsApp message in SQLite, applies routing rules, and exposes the queue to AI agents over MCP — it never generates or sends replies on its own."
+---
+
+The switchboard is the Go binary (`pimywa`). It receives every inbound WhatsApp message through [whatsmeow](https://github.com/tulir/whatsmeow), decides whether to keep or drop it based on the router's whitelist, stores it in SQLite, and places it in a queue for an AI agent to handle over MCP. The switchboard has no opinion about what to reply — that is entirely the agent's job.
+
+<Note>
+  The switchboard does not reply. It is a message store and router. All outbound messages must come through MCP's `send_message` tool or the REST `POST /api/send` endpoint.
+</Note>
+
+## Message lifecycle
+
+Every inbound message travels through the same pipeline before an agent ever sees it.
+
+<Steps>
+  <Step title="WhatsApp delivers the message">
+    The whatsmeow WebSocket receives the message event. The gateway extracts the chat JID, sender JID, plain text (unwrapping ephemeral/view-once/caption containers), message type, and timestamp.
+  </Step>
+  <Step title="Router checks the whitelist">
+    The router resolves the chat JID against `router.json`. If `allow_all` is false and the sender is not in the whitelist, the message is silently dropped at this point — it is never stored, never queued, and the agent will never see it.
+  </Step>
+  <Step title="Message is stored in SQLite">
+    The gateway calls `store.AddMessage`, which writes chat JID, sender JID, text, Unix timestamp, and message type into the `messages` table. `TouchChat` is called alongside to upsert the chat row with the latest name and timestamp.
+  </Step>
+  <Step title="Chat mode determines the next step">
+    Each chat has a mode set by the router and optionally overridden per-chat:
+    - **`auto` mode** — an auto-reply worker drafts a candidate reply and saves it to the `drafts` table. The draft requires approval before reaching the outbox and never sends itself.
+    - **`advanced` mode** — the message is marked unhandled in the queue. It stays there until an MCP agent (or the REST API) reads it, decides on a response, and calls `send_message`.
+  </Step>
+  <Step title="MCP agent reads the queue and sends a reply">
+    The connected agent calls tools such as `get_pending`, `get_messages`, or `list_chats` to read the queue. When it is ready to reply, it calls `send_message` with the target JID and text. This enqueues a row in the `outbox` table.
+  </Step>
+  <Step title="Gateway dispatches the outbox with governor pacing">
+    The outbox drain goroutine polls the `outbox` table every `OutboxPoll` interval (default 5 s). For each due item it checks the governor's rate limiter and kill switch, waits a randomized dispatch delay, shows a composing presence indicator, sends the message via whatsmeow, then marks the row as sent and records the outbound message in the `messages` table.
+  </Step>
+</Steps>
+
+## The SQLite store
+
+All persistent state lives in a single SQLite file whose path is configured via `PIMYWA_DB` (default `/opt/pimywa/data/pimywa.db`). The store uses `modernc.org/sqlite` — a pure-Go driver, no CGO — so the binary cross-compiles cleanly to ARM64.
+
+The key tables are:
+
+| Table | What it holds |
+|---|---|
+| `messages` | Every inbound and outbound message: chat JID, sender, text, timestamp, type, model attribution, delivery/read receipt timestamps |
+| `chats` | One row per chat: mode (`auto`/`advanced`), last timestamp, unread count, active flag, memory, context, rules, confirmation mode |
+| `outbox` | Messages queued for sending: text, target JID, retry count, backoff deadline, dead-letter flag |
+| `drafts` | Auto-reply worker candidates awaiting approval: text, model, status (`pending`/`approved`/`discarded`) |
+| `kv` | Runtime settings: rate limits, delay windows, per-type rules, MCP anti-flood settings |
+| `chat_groups` | Group membership: which JIDs belong to which group JIDs |
+| `media` | Downloaded media file references (path, MIME, size) — never binary blobs |
+
+The database is opened with WAL journal mode and `synchronous=NORMAL` for power-loss resilience. A sudden power cut on the Pi will not corrupt either the main database or the WhatsApp session database.
+
+## Chat modes
+
+Every chat has a mode that controls who handles its messages.
+
+**`auto` mode** is designed for high-volume or low-priority contacts where a cheap API call can draft a canned reply. The auto-reply worker produces a `Draft` row. That draft is held until it is approved (via the dashboard or the REST path), at which point it is promoted to the `outbox` and sent with normal governor pacing. The agent never needs to be involved.
+
+**`advanced` mode** is the default for contacts that deserve deliberate handling. Inbound messages land in the MCP queue (`messages` where `handled=0` and the chat mode is `advanced`). The agent polls the queue via MCP tools, reads context, decides, and explicitly calls `send_message`. Nothing sends automatically.
+
+The mode is set by `router.json` as a default and can be overridden per chat via the dashboard or the REST `POST /api/chats/:jid/mode` endpoint. The MCP `set_mode` tool also lets an agent flip a chat's mode at runtime.
+
+## The outbox
+
+The outbox is a durable FIFO queue. Every call to `send_message` (MCP or REST) enqueues a row immediately and returns. The gateway drains the queue asynchronously under governor control.
+
+Failed sends are retried with exponential backoff: the first failure backs off for 5 s, doubling on each subsequent failure up to a maximum of 1 hour per attempt. After `PIMYWA_OUTBOX_MAX_RETRY` consecutive failures (default 5), the row is **dead-lettered** — it is permanently excluded from the send loop, but never deleted from the database so you can inspect what went wrong. Dead-lettered rows are visible in the dashboard and via `GET /api/outbox`.
+
+## Status machine
+
+The switchboard continuously writes `status.json` (path: `PIMYWA_STATUS`, default `/opt/pimywa/data/status.json`). This file is the data contract between the core and the display adapter — the e-paper face reads it to decide which kaomoji to show.
+
+Moods follow a strict tier system so that critical system states are never masked by routine events:
+
+| Tier | Moods | Behavior |
+|---|---|---|
+| **Tier 1 — transient** | `reading`, `switching`, `thinking`, `working`, `responding`, `done`, `new_msg`, `ai_online`, `vip` | Set briefly (~4 s) then automatically revert to the current queue-derived resting mood |
+| **Tier 2 — queue-derived resting** | `zero`, `few`, `swamped` | Computed from queue depth: 0 messages → `zero`; 1–N → `few`; >N → `swamped` (N = `PIMYWA_SWAMPED_AT`, default 8) |
+| **Tier 3 — system** | `error`, `qr`, `sleeping`, `muted`, `paused` | Set by system events only; tier 1 and tier 2 transitions are blocked while one of these is active |
+
+The startup mood `idle` is a Tier 1 baseline used before the first WhatsApp connection is established.
+
+<CardGroup cols={2}>
+  <Card title="Router" icon="route" href="/concepts/router">
+    How whitelist and per-number rules are configured in router.json
+  </Card>
+  <Card title="Governor" icon="shield" href="/concepts/governor">
+    Rate limits, human-pacing delays, and the kill switch
+  </Card>
+  <Card title="E-Paper Face" icon="face-smile" href="/concepts/e-paper-face">
+    Mood states, eye animations, and display backends
+  </Card>
+</CardGroup>

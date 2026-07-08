@@ -1,0 +1,76 @@
+---
+title: "Configure MCP Bearer Token Authentication"
+sidebarTitle: "MCP Auth"
+description: "Piumy's MCP endpoint is fail-closed: it rejects every request until a bearer token is configured. Run pimywa auth setup to generate and save your token."
+---
+
+The MCP endpoint (`:8081`) is **fail-closed**. Without a configured bearer token (`PIMYWA_MCP_KEY`), the endpoint rejects every request with a `401 Unauthorized` — regardless of what client is connecting or what tool it is calling. This is intentional: an open MCP server has no trust boundary, and MCP tools include owner-scoped actions like `reset_dashboard_password` that must never be reachable without authentication.
+
+<Warning>
+  The token is shown once — save it to a password manager. If you lose it, run `pimywa auth rotate` to generate a new one (this invalidates the old one).
+</Warning>
+
+## Generate a token
+
+Run the following on the Pi. The command writes to `/opt/pimywa/pimywa.env`, so it requires root or sudo:
+
+```bash
+sudo /opt/pimywa/pimywa auth setup
+```
+
+- **Idempotent:** if `PIMYWA_MCP_KEY` is already set, this prints "already configured" and does nothing. The existing token is never overwritten.
+- **Shown once:** the token is printed to stdout exactly once. Save it now — it cannot be retrieved later (only reset with `auth rotate`).
+
+The output includes the exact JSON snippet to paste into your MCP client config.
+
+## Rotate a token
+
+To invalidate the current token and generate a new one:
+
+```bash
+sudo /opt/pimywa/pimywa auth rotate
+```
+
+`rotate` always generates a new token, even if one is already configured. Any MCP client using the old token will immediately receive `401` errors. Restart the core service after rotating so the new token is loaded into the running process:
+
+```bash
+sudo systemctl restart pimywa-core
+```
+
+## Configure your MCP client
+
+Paste the token output into your MCP client configuration. For Claude Code or OpenCode, add the following to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "piumy": {
+      "url": "http://piumy.local:8081/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-token>"
+      }
+    }
+  }
+}
+```
+
+Replace `piumy.local` with the Pi's IP address if mDNS is not available on your network.
+
+<Note>
+  The MCP token (`PIMYWA_MCP_KEY`) is separate from the REST API key (`PIMYWA_API_KEY`). MCP clients authenticate via the `Authorization: Bearer` header; REST callers use the `X-API-Key` header or a `?key=` query parameter.
+</Note>
+
+## Token storage
+
+The token is saved as `PIMYWA_MCP_KEY=<token>` in `/opt/pimywa/pimywa.env`. This file is created with mode `0600` (owner-read-only) and is never committed to git. The repository ships only `deploy/pimywa.env.example` as a template — the real secrets file is gitignored.
+
+## Using the `--env-file` flag
+
+For non-standard installations where the env file lives at a different path, pass it explicitly:
+
+```bash
+sudo /opt/pimywa/pimywa auth setup --env-file /path/to/pimywa.env
+sudo /opt/pimywa/pimywa auth rotate --env-file /path/to/pimywa.env
+```
+
+Both `setup` and `rotate` accept this flag. All other behaviour is identical.

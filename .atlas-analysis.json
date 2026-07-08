@@ -1,0 +1,159 @@
+{
+  "projectType": "saas",
+  "projectName": "Piumy",
+  "projectDescription": "A self-hosted WhatsApp switchboard for ARM64 boards (or your PC) that routes and stores messages, exposes an MCP interface so an external AI agent can read and reply, and displays a pwnagotchi-style face on an e-paper screen.",
+  "theme": "aspen",
+  "primaryColor": "#2D6A4F",
+  "lightColor": "#52B788",
+  "darkColor": "#1B4332",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Installation",
+            "pages": [
+              "installation/raspberry-pi",
+              "installation/hardware",
+              "installation/configuration"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/switchboard",
+              "concepts/router",
+              "concepts/governor",
+              "concepts/e-paper-face"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/connecting-whatsapp",
+              "guides/mcp-auth",
+              "guides/connecting-ai-agent",
+              "guides/dashboard",
+              "guides/session-backup"
+            ]
+          },
+          {
+            "group": "Adapters",
+            "pages": [
+              "adapters/display",
+              "adapters/power"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "MCP Tools",
+            "pages": [
+              "reference/mcp/overview",
+              "reference/mcp/chat-tools",
+              "reference/mcp/message-tools",
+              "reference/mcp/admin-tools"
+            ]
+          },
+          {
+            "group": "REST API",
+            "pages": [
+              "reference/rest/overview",
+              "reference/rest/endpoints"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/env-vars",
+              "reference/router-json",
+              "reference/status-contract"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "reference/cli"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "WhatsApp gateway (receive, store, route messages via whatsmeow)",
+    "MCP server for external AI agents (Claude, OpenCode) to read and reply",
+    "Anti-ban governor: rate limits, human-pacing delays, kill switch, reconnect backoff",
+    "Per-chat routing: whitelist, auto mode (cheap API) vs advanced mode (MCP agent)",
+    "Pwnagotchi-style e-paper kaomoji face with eye gaze animations and mood states",
+    "Self-calibrating CW2015 battery gauge with linearized level and adaptive time-remaining",
+    "Built-in web dashboard: battery chart, WhatsApp link/QR, rules, rate limits",
+    "Bearer-token MCP auth (fail-closed endpoint)",
+    "Session backup/restore with scrypt-encrypted snapshots",
+    "MCP anti-flood guard to block runaway AI agents",
+    "status.json data contract between core and display adapter",
+    "Fully configurable via environment variables — zero hardcode"
+  ],
+  "publicApiSurface": [
+    "pimywa serve",
+    "pimywa state <mood>",
+    "pimywa seed",
+    "pimywa auth setup [--env-file <path>]",
+    "pimywa auth rotate [--env-file <path>]",
+    "pimywa restore-session [--force] <file>",
+    "MCP tool: get_status",
+    "MCP tool: list_chats",
+    "MCP tool: get_messages",
+    "MCP tool: get_queue",
+    "MCP tool: send_message",
+    "MCP tool: get_decision_policy",
+    "MCP tool: set_mode",
+    "MCP tool: escalate",
+    "MCP tool: mark_handled",
+    "MCP tool: resolve_chat",
+    "MCP tool: get_outbox",
+    "MCP tool: get_chat",
+    "MCP tool: set_chat_status",
+    "MCP tool: set_chat_active",
+    "MCP tool: claim_chat",
+    "MCP tool: release_chat",
+    "MCP tool: set_chat_memory",
+    "MCP tool: set_chat_context",
+    "MCP tool: get_media",
+    "MCP tool: get_chat_groups",
+    "MCP tool: get_pending",
+    "MCP tool: get_drafts",
+    "MCP tool: reset_dashboard_password",
+    "REST GET /api/status",
+    "REST GET /api/chats",
+    "REST GET /api/messages",
+    "REST GET /api/queue",
+    "REST POST /api/send",
+    "REST POST /api/mode",
+    "REST POST /api/escalate",
+    "REST POST /api/handled",
+    "REST GET /api/battery/log",
+    "REST GET /api/events (SSE)",
+    "REST GET /healthz",
+    "PIMYWA_STATUS env var",
+    "PIMYWA_DB env var",
+    "PIMYWA_ROUTER env var",
+    "PIMYWA_MCP_ADDR env var",
+    "PIMYWA_MCP_KEY env var",
+    "PIMYWA_API_ADDR env var",
+    "PIMYWA_GATEWAY env var",
+    "contracts/status.schema.json"
+  ]
+}

@@ -1,47 +1,134 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Piumy in 5 Minutes"
+sidebarTitle: "Quickstart"
+description: "Run the Piumy core and render the e-paper kaomoji face on your PC — no hardware, no WhatsApp needed. Uses Contract #001: the file display backend."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+This guide follows **Contract #001** — the zero-risk PC demo path. The Go core writes a `status.json` file describing the board's current mood; the Python `file` display adapter reads it and renders the kaomoji face to `display.png`. No WhatsApp number, no ARM board, no physical hardware of any kind is required. It's the fastest way to see Piumy's face engine working and to verify that your environment can build and run the stack.
 
 ## Prerequisites
 
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+- **Go 1.21+** — [install.go.dev](https://go.dev/dl/)
+- **Python 3.9+**
+- **pip**
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
+  <Step title="Clone the repository">
     ```bash
-    npm install your-package
+    git clone https://github.com/chamilonster/Piumy.git
+    cd Piumy
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Write a mood to status.json">
+    The `state` subcommand writes `status.json` with the mood you specify. This is the same file the display adapter and the dashboard read — the core's single source of truth for what the board is doing right now.
 
     ```bash
-    your-cli init
+    cd core
+    go run . state responding
     ```
+
+    You should see output like:
+    ```
+    status.json written to /tmp/pimywa-status.json (mood=responding)
+    ```
+
+    <Tip>
+      Valid moods are: `idle` `zero` `new_msg` `few` `swamped` `thinking` `working` `responding` `ai_online` `vip` `sleeping` `alert` `error` `qr`
+    </Tip>
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Render the face">
+    Switch to the `file` display adapter, install its dependencies, and run the renderer. It reads `status.json` and outputs `display.png` — a 250×122 px 1-bit image, the same dimensions as the e-paper panel.
 
     ```bash
-    your-cli start
+    cd ../adapters/display/file
+    pip install -r requirements.txt
+    python render.py
     ```
+
+    Open `display.png` to see the kaomoji face for the `responding` mood. Every mood produces a distinct face with eyes, expression, and context-aware detail.
   </Step>
+
+  <Step title="Try other moods">
+    Go back to the core directory and try different moods to see how the face changes:
+
+    ```bash
+    cd ../../..
+    cd core
+
+    go run . state thinking
+    cd ../adapters/display/file && python render.py
+
+    cd ../../..
+    cd core
+    go run . state swamped
+    cd ../adapters/display/file && python render.py
+
+    cd ../../..
+    cd core
+    go run . state ai_online
+    cd ../adapters/display/file && python render.py
+    ```
+
+    The eye engine rotates through three eye types and twelve gaze directions — each render may show a slightly different gaze even for the same mood.
+  </Step>
+
+  <Step title="Seed demo data (optional)">
+    The `seed` subcommand inserts two demo chats into the SQLite store so you can explore the REST API without a real WhatsApp connection.
+
+    ```bash
+    cd core
+    go run . seed
+    ```
+
+    Output:
+    ```
+    seed OK at /tmp/pimywa.db
+    ```
+
+    You can then query the REST API (once `serve` is running in the next step) with `curl http://localhost:8080/api/chats` to see the demo data.
+  </Step>
+
+  <Step title="Start serve mode">
+    The `serve` subcommand starts the full switchboard: MCP server on `:8081`, REST API on `:8080`, and the web dashboard on `:80`. Setting `PIMYWA_GATEWAY=none` tells the core to skip the WhatsApp connection — everything else starts normally.
+
+    ```bash
+    cd core
+    PIMYWA_GATEWAY=none go run . serve
+    ```
+
+    You should see:
+    ```
+    Piumy REST API on :8080
+    Piumy dashboard on :80 (user=admin)
+    Piumy switchboard — MCP (streamable HTTP) on :8081 · db=/tmp/pimywa.db
+    Piumy gateway: none (no WhatsApp connection; start via dashboard)
+    ```
+
+    Open `http://localhost` in your browser to reach the dashboard. The MCP server at `http://localhost:8081/mcp` is ready to accept connections from an MCP client, but will reject all requests until you configure a bearer token — see [Connecting the MCP agent](/guides/mcp-auth).
+
+    <Note>
+      The MCP endpoint is **fail-closed**: every request is rejected until `PIMYWA_MCP_KEY` is set. Run `go run . auth setup` to generate a token, or pass `PIMYWA_MCP_KEY=dev-token` on the command line for local testing only.
+    </Note>
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## What's next
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Install on Raspberry Pi" icon="microchip" href="/installation/raspberry-pi">
+    Deploy Piumy on a Raspberry Pi Zero 2 W with the e-paper display and CW2015 battery gauge.
+  </Card>
+  <Card title="Connect WhatsApp" icon="message" href="/guides/connecting-whatsapp">
+    Link a dedicated WhatsApp number by scanning the QR code on the e-paper or the dashboard.
+  </Card>
+  <Card title="Configure MCP Auth" icon="key" href="/guides/mcp-auth">
+    Generate a bearer token and wire your MCP client (Claude Code / OpenCode) to the board.
+  </Card>
+  <Card title="MCP Reference" icon="plug" href="/reference/mcp/overview">
+    Browse every MCP tool the agent can call: `list_chats`, `get_messages`, `send_message`, and more.
+  </Card>
+</CardGroup>

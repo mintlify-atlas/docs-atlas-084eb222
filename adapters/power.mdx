@@ -1,0 +1,121 @@
+---
+title: "Power Adapter: CW2015 Battery Gauge"
+sidebarTitle: "Power Adapter"
+description: "The Piumy power adapter reads the CW2015 battery gauge over I2C, computes a linearized level and adaptive time-remaining, and writes battery.json for the core to merge into status.json."
+---
+
+The power adapter (`adapters/power/service.py`) is a Python service that reads the CW2015 fuel gauge over I2C and writes `battery.json` — a sidecar the core merges into `status.json` on its heartbeat. It runs as the `pimywa-power` systemd service on the Pi. The service never writes to `status.json` directly; it owns only its own small sidecar file, keeping the single-writer architecture intact.
+
+## The CW2015 fuel gauge
+
+The CW2015 is the dedicated gas-gauge IC on common "UPS-Lite" HATs for Raspberry Pi. The adapter communicates with it over I2C bus 1 at address `0x62` (the UPS-Lite default).
+
+Rather than trusting the chip's own on-chip state-of-charge register (`REG_SOC`), the adapter reads the **raw cell voltage** (`REG_VCELL`) directly. Cheap and generic UPS-Lite boards commonly ship with a default or mismatched battery-profile table, making the chip's own estimate unreliable. The raw voltage is mapped through an explicit 1S LiPo discharge curve instead — the same approach used by most hobbyist LiPo fuel-gauge projects when paired with an uncalibrated gauge.
+
+The chip is woken on init (and defensively on each implausibly low reading). This UPS-Lite variant boots with its `SLEEP` bits set (`REG_MODE = 0xC0`), which causes `VCELL` to read 0 V regardless of the real cell voltage until the chip is explicitly woken.
+
+## Battery intelligence
+
+The adapter does more than pass through a raw reading:
+
+- **LiPo curve mapping** — raw voltage is mapped through a calibrated 1S LiPo discharge curve (`_LIPO_CURVE` in `cw2015.py`), not a naive linear percentage. This accounts for the steep knee near full charge, the long flat plateau through the middle, and the steep knee near empty that make raw voltage alone visually jumpy.
+- **Linearized level** — `timeremain.py` blends the curve-based level into a smoothed, linearized 0–100% value for the `battery` field. This is what drives the display bar, never a raw unsmoothed number.
+- **Adaptive time-remaining** — starts as a theoretical estimate (capacity ÷ draw). Once enough real discharge samples accumulate, the estimate is replaced by the actual learned discharge rate for this specific pack.
+- **Charging detection** — infers charging from voltage rising or the level pinning at 100%. No dedicated charging pin is needed.
+- **Per-minute discharge log** — every reading is appended to a CSV log (`PIMYWA_BATTERY_LOG_FILE`, default `/opt/pimywa/data/battery_log.csv`) so voltage is traceable over time and the discharge curve can be recalibrated from real data.
+
+## The battery.json sidecar
+
+The power adapter is the sole writer of `battery.json`. The core reads it back in on its own heartbeat and merges the fields into `status.json`. This single-writer discipline eliminates write races on tmpfs.
+
+The sidecar is written atomically on every poll cycle (write to `.tmp`, then `os.replace`). Its fields are:
+
+| Field | Type | Description |
+|---|---|---|
+| `battery` | integer | Linearized battery level, 0–100% |
+| `voltage_mv` | integer | Raw cell voltage in millivolts |
+| `charging` | boolean | Whether the cell is currently charging |
+| `time_remaining_min` | integer or null | Estimated minutes remaining; `null` when unknown |
+| `ts` | integer | Unix timestamp of this reading |
+
+<Note>
+The power adapter is the ONLY writer of `battery.json`. The core is the ONLY writer of `status.json`. This single-writer discipline prevents race conditions on tmpfs.
+</Note>
+
+## Installation
+
+<Steps>
+  <Step title="Enable I2C on the Pi">
+    Add to `/boot/firmware/config.txt` and reboot:
+
+    ```
+    dtparam=i2c_arm=on
+    ```
+  </Step>
+
+  <Step title="Install Python packages">
+    ```bash
+    cd adapters/power
+    pip install -r requirements.txt
+    ```
+
+    `requirements.txt` requires `smbus2>=0.4`. This is the only dependency — it is a generic Linux `i2c-dev` binding, not a CW2015-specific vendor SDK. On a dev PC without the hardware, the backend silently degrades to a no-op; the package is only needed on the Pi.
+  </Step>
+
+  <Step title="Configure the systemd unit">
+    Example unit at `/etc/systemd/system/pimywa-power.service`:
+
+    ```ini
+    [Unit]
+    Description=Pimywa power service
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=pi
+    EnvironmentFile=/opt/pimywa/.env
+    Environment=PIMYWA_POWER_BACKEND=cw2015-i2c
+    ExecStart=/opt/pimywa/venv/bin/python /opt/pimywa/adapters/power/service.py
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+  </Step>
+</Steps>
+
+## Backends
+
+Two backends are available. Select one with the `PIMYWA_POWER_BACKEND` environment variable.
+
+### `cw2015-i2c`
+
+Real hardware path. Reads the CW2015 over I2C using `smbus2`. Degrades gracefully to a no-op if `smbus2` is not importable or if the I2C device is unavailable — it never raises or crash-loops.
+
+### `none`
+
+No-op. The service starts and runs its polling loop, but no readings are taken and `battery.json` is not written. The `battery`, `voltage_mv`, `charging`, and `time_remaining_min` fields will be absent (null) in `status.json`.
+
+## Environment variables
+
+All knobs are env-driven. Set them in `/opt/pimywa/.env` or export them directly.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_BATTERY_FILE` | `/run/pimywa/battery.json` | Path the adapter writes battery data to |
+| `PIMYWA_BATTERY_LOG_FILE` | `/opt/pimywa/data/battery_log.csv` | Per-minute discharge log |
+| `PIMYWA_POWER_BACKEND` | `none` | Backend: `cw2015-i2c` \| `none` |
+| `PIMYWA_I2C_BUS` | `1` | I2C bus number for CW2015 |
+| `PIMYWA_I2C_ADDR` | `0x62` | I2C address for CW2015 |
+| `PIMYWA_POLL_INTERVAL` | `30` | Seconds between readings |
+
+## Invalid readings
+
+If `VCELL` reads ≤ 2500 mV — implausible for any real LiPo cell — the adapter does **not** report 0%. Instead it attempts one wake-and-reread cycle (since this UPS-Lite boots with its SLEEP bits set and a sleeping chip reads 0 V). If the voltage is still below the floor after waking, the adapter returns `None` (unknown) and skips writing `battery.json` for that cycle.
+
+A genuinely near-empty LiPo cell sits at approximately 3.0–3.3 V and still comfortably exceeds the 2500 mV floor, receiving a real (low but nonzero) percentage from the discharge curve. Reporting 0% for a no-signal condition would be indistinguishable from a real empty battery — the no-placeholder rule applies here too.
+
+<Warning>
+`PIMYWA_BATTERY_FILE` defaults to `/run/pimywa/battery.json` (tmpfs). Ensure `/run/pimywa/` exists before starting the service, or let the systemd unit create it with `RuntimeDirectory=pimywa`.
+</Warning>

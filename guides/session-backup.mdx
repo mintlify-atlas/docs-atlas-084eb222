@@ -1,0 +1,99 @@
+---
+title: "Back Up and Restore the WhatsApp Session"
+sidebarTitle: "Session Backup"
+description: "Piumy can encrypt and back up the WhatsApp session database. Restore from backup with the pimywa restore-session CLI command when the session is corrupt or lost."
+---
+
+The WhatsApp session database (`PIMYWA_SESSION_DB`) contains your linked device credentials. If it is lost or corrupted, you must re-link by scanning the QR code again. Piumy can encrypt periodic backups of this file to protect against SD card corruption — the most common failure mode on always-on ARM boards.
+
+<Warning>
+  Never restore while `pimywa serve` is running — doing so will corrupt the live session. Stop the service first. The `restore-session` command checks for a live process and refuses unless `--force` is given.
+</Warning>
+
+## Enable backups
+
+Add the following to `/opt/pimywa/pimywa.env`. Backups are **disabled by default** — they are never written without an encryption key:
+
+```bash
+PIMYWA_BACKUP_KEY=<passphrase>              # required to enable; empty = backups disabled
+PIMYWA_BACKUP_DIR=/opt/pimywa/data/backups  # directory for encrypted backup files
+PIMYWA_BACKUP_KEEP=5                        # keep this many newest backups; oldest pruned automatically
+PIMYWA_BACKUP_INTERVAL=24h                  # periodic backup cadence
+```
+
+Restart the core after editing:
+
+```bash
+sudo systemctl restart pimywa-core
+```
+
+## How backups work
+
+**Encryption:** each backup uses a per-backup random salt fed through scrypt key derivation from `PIMYWA_BACKUP_KEY`, then encrypts the snapshot with AES-256-GCM. The session database is never written to disk unencrypted.
+
+**Snapshot method:** the core uses SQLite's `VACUUM INTO` to take a safe, consistent snapshot of the live database file without stopping the WhatsApp gateway.
+
+**Triggers — a backup fires on three occasions:**
+
+1. **Periodic** — on the `PIMYWA_BACKUP_INTERVAL` tick (default 24 hours).
+2. **Post-link hook** — after every successful WhatsApp connect (fresh link and reconnects). Debounced: a flappy-WiFi reconnect storm won't spam scrypt derivations on a Pi Zero.
+3. **On-demand** — via the REST API (see below).
+
+**Rotation:** backup files are named `session-<nanosecond-timestamp>.bak`. When the count exceeds `PIMYWA_BACKUP_KEEP`, the oldest are deleted automatically.
+
+## Restore from backup
+
+<Steps>
+  <Step title="Stop the core service">
+    The restore command refuses to run while `pimywa serve` is active, unless you pass `--force`.
+
+    ```bash
+    sudo systemctl stop pimywa-core
+    ```
+  </Step>
+  <Step title="Run restore-session">
+    Pass the path to the backup file you want to restore:
+
+    ```bash
+    sudo /opt/pimywa/pimywa restore-session /opt/pimywa/data/backups/<backup-file>
+    ```
+
+    The command decrypts the backup using `PIMYWA_BACKUP_KEY` and replaces the live session database. It will print the source and destination paths on success.
+  </Step>
+  <Step title="Restart the core">
+    ```bash
+    sudo systemctl start pimywa-core
+    ```
+
+    The gateway will reconnect to WhatsApp using the restored session automatically.
+  </Step>
+</Steps>
+
+If you need to bypass the live-process check (e.g. after an unclean shutdown left a stale lock file), add `--force`:
+
+```bash
+sudo /opt/pimywa/pimywa restore-session --force /opt/pimywa/data/backups/<backup-file>
+```
+
+## Same-volume warning
+
+<Warning>
+  The default `PIMYWA_BACKUP_DIR` (`/opt/pimywa/data/backups`) is on the **same SD card** as the session database. This protects against database file corruption but **not** against SD card failure. For disaster recovery, point `PIMYWA_BACKUP_DIR` at an external path:
+
+  ```bash
+  PIMYWA_BACKUP_DIR=/mnt/usb/pimywa-backups   # USB stick
+  # or
+  PIMYWA_BACKUP_DIR=/mnt/nfs/pimywa-backups   # NFS mount
+  ```
+</Warning>
+
+## Trigger a backup on demand
+
+Use the REST API to take an immediate backup without waiting for the next periodic tick:
+
+```bash
+curl -X POST http://piumy.local:8080/api/backup \
+  -H "X-API-Key: <key>"
+```
+
+The response includes the resulting backup file path, size in bytes, and timestamp. The rotation policy applies — the oldest backup is pruned if the count exceeds `PIMYWA_BACKUP_KEEP`.

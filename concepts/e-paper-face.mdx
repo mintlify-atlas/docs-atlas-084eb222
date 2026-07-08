@@ -1,0 +1,129 @@
+---
+title: "E-Paper Kaomoji Face: Moods, Eyes, and Animations"
+sidebarTitle: "E-Paper Face"
+description: "Piumy's e-paper display shows real pwnagotchi kaomoji faces that react to every system event. Covers mood states, eye gaze animations, the face catalog, and display adapter backends."
+---
+
+Piumy's display is a homage to [pwnagotchi](https://github.com/evilsocket/pwnagotchi) by [@evilsocket](https://github.com/evilsocket). Real pwnagotchi kaomoji faces — not vectors — rendered 1-bit on a Waveshare 2.13" e-paper panel. The face reacts to everything: a new message arriving, the AI agent connecting, the battery draining. Big eyes that actually look around in a gaze loop, blink, and land on different expressions depending on what is happening. It moves when there is something to react to and settles into a calm, low-power idle when quiet.
+
+<Tip>
+  Test the full face catalog on your PC: `cd adapters/display/file && python render.py` after writing different moods with `go run . state <mood>`.
+</Tip>
+
+## Mood states
+
+The core writes a `mood` field to `status.json` on every relevant event. The display adapter maps that mood to a pool of face variants and animates within it.
+
+| Mood | When it shows |
+|---|---|
+| `idle` | No activity, WhatsApp connected |
+| `zero` | Queue is empty, relaxed |
+| `new_msg` | New inbound message just arrived |
+| `few` | 1–N messages in queue |
+| `swamped` | Queue over threshold (`PIMYWA_SWAMPED_AT`, default 8) |
+| `thinking` | Agent is deciding |
+| `working` | Agent is doing work |
+| `responding` | Agent is sending a reply |
+| `ai_online` | First MCP agent just connected |
+| `vip` | VIP contact message |
+| `reading` | Agent is reading messages |
+| `switching` | Agent is browsing chats |
+| `done` | Message marked handled |
+| `muted` | Kill switch is on |
+| `sleeping` | Shutdown in progress (safe to unplug) |
+| `paused` | Anti-ban reconnect pause |
+| `alert` | Reconnect warning |
+| `error` | Connection error |
+| `qr` | WhatsApp pairing QR on screen |
+
+## Mood tiers
+
+Moods are organized into three tiers that govern how they interact with each other. This prevents a routine event (an agent reading a message) from masking a critical system state (the WhatsApp connection is down).
+
+**Tier 1 — transient (~4 s)**
+
+`reading`, `switching`, `thinking`, `working`, `responding`, `done`, `new_msg`, `ai_online`, `vip`
+
+These moods are set briefly when the triggering event occurs, then automatically revert to the current queue-derived resting mood. The revert is managed by a generation counter — if a newer mood-setting call arrives before the timer fires, the stale revert is cancelled. Tier 1 moods are deliberately not blocked by Tier 2 queue moods: an agent almost always has a non-empty queue while it is working, so gating transient moods on queue depth would suppress the feature entirely.
+
+**Tier 2 — queue-derived resting**
+
+`zero`, `few`, `swamped`
+
+Computed from the current depth of the advanced-mode message queue. These are the "resting" state the face returns to after transient moods expire. Queue depth 0 → `zero`; 1 through `PIMYWA_SWAMPED_AT` → `few`; above the threshold → `swamped`.
+
+**Tier 3 — system (never overridden)**
+
+`error`, `qr`, `sleeping`, `muted`, `paused`
+
+Set directly by system-level events (connection error, QR pairing, shutdown, mute toggle, anti-ban pause). While any Tier 3 mood is active, `React()` and `SetResting()` are both no-ops — an event notification from an agent cannot flash over "WhatsApp is down" or "muted". Only an explicit system-authority call (`UpdateMood`, `SetMuted`) can clear a Tier 3 mood.
+
+## Eye engine
+
+The eye engine renders three eye types — open (movable pupils), line (content), and wide — each capable of rotating gaze direction across six positions: center, left, right, up, down-left, and blink. The `idle` mood runs the full 12-frame gaze loop: look center → look left → look right → blink → look up → bored → look down-left → yawn.
+
+When `wifi == 0` and the mood is `idle`, `zero`, or `few`, the face overrides to wide eyes and a flat mouth — the "no wifi, searching" expression — matching the `idle_proof.py` NOWIFI frame.
+
+## Face catalog
+
+Each mood maps to a specific eye type, mouth shape, optional accessory, and a set of variants the animator cycles through.
+
+| Mood | Eye type | Mouth | Accessories | Variants |
+|---|---|---|---|---|
+| `idle` | open (movable pupils) | smile / flat / smirk / yawn | zzz | 8 |
+| `zero` | line (content) | smile | — | 3 |
+| `new_msg` | wide | o | bang | 3 |
+| `few` | round / open | flat / smile | — | 3 |
+| `swamped` | dizzy | wavy / o | sweat | 3 |
+| `thinking` | up | flat | gear | 3 |
+| `working` | line | flat | gear | 3 |
+| `responding` | round / open | talk | — | 3 |
+| `ai_online` | star | grin | — | 3 |
+| `vip` | star / wide | grin | — | 3 |
+| `sleeping` | line | flat | zzz | 2 |
+| `alert` | wide | o | bang | 2 |
+| `error` | x | frown | — | 3 |
+
+The `qr` mood does not appear in the face catalog — it renders a full-canvas QR code instead of a kaomoji face.
+
+The `idle` variants implement the full alive cycle from `idle_proof.py`: look center → look left → look right → blink → look up → bored → look down-left → yawn.
+
+## Animation model
+
+The animator uses an **attention envelope**: it ticks fast right after any visible change, then gradually ramps down to a slow idle pace once things have been quiet for a while.
+
+| Setting | Default | Description |
+|---|---|---|
+| `PIMYWA_ANIM_FAST_SEC` | `2.0` s | Idle-tick interval immediately after a real status change |
+| `PIMYWA_ANIM_SLOW_SEC` | `18.0` s | Idle-tick interval once quiet for `PIMYWA_ANIM_RAMP_SEC` |
+| `PIMYWA_ANIM_RAMP_SEC` | `60.0` s | Seconds of quiet before the interval lerps from fast to slow |
+| `PIMYWA_LOW_BATT` | `15` % | Battery level below which the idle animation interval is slowed 4× |
+
+The animator piggybacks on any visible refresh — a battery level change, a wifi level change, an agent connecting or disconnecting, or an MCP tool call — rather than running a fixed heartbeat. Identical images are skipped entirely (no pointless partial update).
+
+The e-paper panel uses partial updates (`displayPartial`) for most mood changes, which produces zero flash. Major state transitions — entering or leaving `qr`, `error`, or `sleeping` — trigger a full refresh (`init` + `Clear` + `displayPartBaseImage`) with a deliberate flash to reset the panel cleanly. An anti-ghosting setting (`PIMYWA_EPAPER_GHOST_PARTIALS`, default 40) automatically triggers a full refresh every N partials to prevent residual ghosting from accumulated partial updates.
+
+## Display backends
+
+The display adapter is a separate Python service that reads `status.json` and drives the panel. Three backends are available, selected via `PIMYWA_DISPLAY`.
+
+**`file`** (default for development)
+
+Renders the current face to a PNG file at `PIMYWA_DISPLAY_OUT` (default `display.png`). No hardware required. Use this to develop, preview all faces, and test the full face catalog on any machine.
+
+**`epaper-waveshare`**
+
+Drives the Waveshare 2.13" V4 e-paper panel via `spidev` (SPI) and `libgpiod` (GPIO). No vendor Python package is needed — the epd2in13_V4 register protocol is implemented directly in `epaper/backend.py`. GPIO pins are configurable via environment variables (`PIMYWA_EPAPER_RST_PIN`, `PIMYWA_EPAPER_DC_PIN`, `PIMYWA_EPAPER_BUSY_PIN`, `PIMYWA_EPAPER_PWR_PIN`).
+
+**`none`**
+
+No output. The service runs and reads `status.json` but produces no display output. Use for headless operation where the display adapter service is still needed for other reasons (e.g. writing `face.json` for the dashboard) but there is no physical panel.
+
+<CardGroup cols={2}>
+  <Card title="Switchboard" icon="server" href="/concepts/switchboard">
+    The status machine that drives mood transitions
+  </Card>
+  <Card title="Governor" icon="shield" href="/concepts/governor">
+    The muted and paused system moods
+  </Card>
+</CardGroup>

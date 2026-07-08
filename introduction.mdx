@@ -1,0 +1,75 @@
+---
+title: "Piumy: WhatsApp Switchboard with AI and E-Paper"
+sidebarTitle: "Introduction"
+description: "Piumy is a self-hosted WhatsApp gateway for ARM64 boards. It routes and stores messages in SQLite, exposes an MCP server for AI agents, and shows a pwnagotchi-style face on e-paper."
+---
+
+Piumy is a distributed, portable WhatsApp assistant for ARM64 boards. A tiny board acts as the **switchboard** — it receives messages, stores them in SQLite, and exposes them over the Model Context Protocol (MCP). The AI agent — Claude Code, OpenCode, or any other MCP client — lives on a separate machine with RAM and connects to the board over the network. The board routes and stores; the brain is always elsewhere.
+
+## What Piumy does
+
+The architecture is intentionally simple. WhatsApp messages arrive at a dedicated number, flow into the Go switchboard, and are stored in SQLite. The switchboard never replies on its own — it waits for an agent to pull the queue via MCP and act. Meanwhile, a Python display adapter reads a `status.json` file and draws a pwnagotchi-style kaomoji face on the e-paper screen, reacting in real time to what's happening.
+
+```
+WhatsApp (dedicated number)
+      │
+      ▼
+  SWITCHBOARD (Go, tiny board) ── e-paper (Python adapter) → face
+   · receives / stores (SQLite)     └ reads status.json
+   · per-chat mode: auto | advanced
+   · anti-ban governor · whitelist
+   · exposes MCP ──────────────┐
+        │ auto                 │ advanced (queue, pull)
+        ▼                      ▼
+   cheap API             AGENT over MCP (another machine with RAM)
+   (optional)             Claude / Opus / OpenCode + tools
+```
+
+The seams between components are **data contracts**: `status.json` carries the board's live state from core to display adapter, and MCP/HTTP carries messages and replies between the board and the external agent.
+
+## The stack
+
+Piumy is built from four distinct layers, each with a clean boundary:
+
+- **Core (Go binary `pimywa`):** Built on [`whatsmeow`](https://github.com/tulir/whatsmeow) for the WhatsApp Web multidevice protocol, [`mcp-go`](https://github.com/mark3labs/mcp-go) for the MCP server, and `modernc.org/sqlite` (pure Go, no CGO) for the message store. A single lightweight binary runs the gateway, router, anti-ban governor, MCP server, REST API, and web dashboard.
+
+- **Display adapter (Python):** Reads `status.json` and renders real pwnagotchi-style kaomoji faces via Pillow. Supports three backends: `file` (writes a PNG — ideal for development on any PC), `epaper-waveshare` (pushes 1-bit pixels to the physical display over SPI), and `none` (disables rendering entirely).
+
+- **Power adapter (Python):** Reads the CW2015 fuel gauge chip over I2C, runs a self-calibrating discharge curve, and writes a `battery.json` sidecar that the core merges into `status.json` on its heartbeat tick. Backends: `cw2015-i2c` and `none`.
+
+- **External AI agent (any MCP client):** Claude Code, OpenCode, or anything that speaks the Model Context Protocol. This never runs on the board — it connects to `:8081` over the LAN (or a tunnel) to read chats, pull the message queue, and send replies.
+
+## Key principles
+
+Piumy is designed around a small set of non-negotiable rules:
+
+**The board does not reply.** The switchboard routes and stores — it never initiates a message or generates a reply on its own. Every outbound message originates from whoever connects over MCP.
+
+**AI never runs on the board.** The ARM64 board has no RAM budget for inference. The agent is always external — the MCP interface is the only bridge between the two machines.
+
+**All configuration is env-driven.** There are no hardcoded paths, addresses, or credentials anywhere in the codebase. Every setting — from `PIMYWA_STATUS` (the path to `status.json`) to `PIMYWA_MCP_KEY` (the bearer token) — is read from environment variables at startup. This makes the same binary run identically on a Raspberry Pi Zero 2 W and a developer's laptop.
+
+**The anti-ban governor is non-negotiable.** The governor enforces per-minute and per-day send rate limits, adds human-paced delays between sends, and provides a kill switch (mute). Rate limits can only be loosened to a safe ceiling — the dashboard cannot tighten them past the anti-ban floor. No configuration change can bypass it.
+
+## Status
+
+Piumy is **MVP feature-complete** and running on a Raspberry Pi Zero 2 W. The core switchboard (WhatsApp gateway, router, anti-ban governor, MCP server), the e-paper kaomoji face and eye engine, self-calibrating battery intelligence, the web dashboard, and MCP bearer-token authentication are all deployed.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Run the core and render the e-paper face on your PC — no hardware, no WhatsApp needed.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Component boundaries, data contracts, ports, and the anti-ban golden rules.
+  </Card>
+  <Card title="Install on Raspberry Pi" icon="microchip" href="/installation/raspberry-pi">
+    Flash, wire, and deploy Piumy on a Raspberry Pi Zero 2 W with `install.sh`.
+  </Card>
+  <Card title="MCP Reference" icon="plug" href="/reference/mcp/overview">
+    Every MCP tool the agent can call: `list_chats`, `get_messages`, `send_message`, and more.
+  </Card>
+</CardGroup>
+
+## License
+
+Piumy is released under **[AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html)** (network copyleft). You are free to use, modify, and distribute it — but any version you run as a service must also be AGPL-3.0. If you need to embed Piumy in a closed-source product, contact the author to arrange a commercial license.

@@ -1,0 +1,132 @@
+---
+title: "Configure Piumy with Environment Variables"
+sidebarTitle: "Configuration"
+description: "Piumy is configured entirely via environment variables loaded from /opt/pimywa/pimywa.env. No config file format to learn — just KEY=VALUE pairs."
+---
+
+All Piumy configuration is driven by environment variables. The three systemd services (`pimywa-core`, `pimywa-display`, `pimywa-power`) all load the same file via `EnvironmentFile=/opt/pimywa/pimywa.env`, so one file configures the entire stack. The installer creates this file with sensible defaults on a fresh install, and migrates it on upgrade — appending only the keys that are missing, never overwriting values you have already set.
+
+<Warning>
+  `PIMYWA_MCP_KEY` must be set before the MCP endpoint accepts any connections. Run `pimywa auth setup` to generate it. The installer does this automatically; on a manual install you must run it yourself.
+</Warning>
+
+## Example env file
+
+The file shipped in the repository as `deploy/pimywa.env.example`:
+
+```bash
+# Piumy core environment. Copy to pimywa.env and adjust.
+# pimywa.env is NOT committed (it may hold an API key).
+PIMYWA_DB=/opt/pimywa/data/pimywa.db
+PIMYWA_STATUS=/opt/pimywa/data/status.json
+PIMYWA_ROUTER=/opt/pimywa/router.json
+PIMYWA_API_ADDR=:8080
+PIMYWA_MCP_ADDR=:8081
+# Empty = open (dev, LAN only). Set a value to require X-API-Key on /api/*.
+PIMYWA_API_KEY=
+PIMYWA_NAME=Piumy
+```
+
+The installer expands this significantly with all the defaults listed below. The full deployed file at `/opt/pimywa/pimywa.env` is never committed to git — it may contain API keys and bearer tokens.
+
+## Configuration Groups
+
+### Paths
+
+File and directory paths used by the core. All paths default to locations under `/opt/pimywa/data/` (durable SD storage) or `/run/pimywa/` (tmpfs RAM, for transient files that must not wear the SD card).
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_DB` | `/opt/pimywa/data/pimywa.db` | SQLite switchboard database (messages, queue, whitelist) |
+| `PIMYWA_STATUS` | `status.json` (relative) | `status.json` path — the data contract between core and display adapter |
+| `PIMYWA_ROUTER` | `router.json` (relative) | Per-chat routing rules and whitelist |
+| `PIMYWA_SESSION_DB` | `/opt/pimywa/data/wa.db` | WhatsApp session SQLite file (linked device credentials) |
+
+### Network
+
+Bind addresses for the three servers the core exposes. All default to binding on all interfaces — restrict with a specific IP if needed.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_API_ADDR` | `:8080` | REST API (curl / scripts / dashboard backend) |
+| `PIMYWA_MCP_ADDR` | `:8081` | MCP server endpoint (AI agents connect here) |
+| `PIMYWA_DASH_ADDR` | `:80` | Web dashboard (served by the same binary; requires `CAP_NET_BIND_SERVICE`) |
+
+### Authentication
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_MCP_KEY` | `""` | MCP bearer token (`Authorization: Bearer <token>`). **Fail-closed** — the MCP endpoint rejects all requests until this is set. Generate with `pimywa auth setup`. |
+| `PIMYWA_API_KEY` | `""` | REST API key (`X-API-Key` header or `?key=` query param). Empty = open (LAN dev only). |
+| `PIMYWA_DASH_USER` | `admin` | Dashboard login username |
+| `PIMYWA_DASH_PASS` | `""` | Dashboard password (plaintext; bcrypt-hashed in memory at startup). If empty and `PIMYWA_DASH_PASS_HASH` is also empty, a random password is generated and logged once via `journalctl -u pimywa-core`. |
+| `PIMYWA_DASH_PASS_HASH` | `""` | Pre-computed bcrypt hash of the dashboard password. Overrides `PIMYWA_DASH_PASS` when set. |
+
+### Gateway
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_GATEWAY` | `none` | WhatsApp backend. `"whatsmeow"` to connect to WhatsApp; `"none"` for offline/dev mode. |
+| `PIMYWA_WA_DEVICE` | `Piumy` | Device label shown in WhatsApp → Linked Devices. Set to something inconspicuous (e.g. `Chrome (Windows)`) for extra camouflage. Only takes effect at pairing time — an already-linked device's name is unaffected. |
+
+### Anti-Ban Delays
+
+All delays are randomized within a min/max range to simulate human pacing. A non-positive or unparseable value falls back to the default.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_DELAY_DISPATCH_MIN` | `1s` | Minimum random wait before each outbound WhatsApp send |
+| `PIMYWA_DELAY_DISPATCH_MAX` | `5s` | Maximum random wait before each outbound WhatsApp send |
+| `PIMYWA_DELAY_READ_MIN` | `2s` | Minimum random wait before marking a message as read |
+| `PIMYWA_DELAY_READ_MAX` | `8s` | Maximum random wait before marking a message as read |
+| `PIMYWA_DELAY_ACTION_MIN` | `1s` | Minimum delay before other WhatsApp-facing actions (contact/group syncs) |
+| `PIMYWA_DELAY_ACTION_MAX` | `4s` | Maximum delay before other WhatsApp-facing actions |
+
+### Rate Limits
+
+The governor's hard send caps. These are startup defaults and can be overridden at runtime via the dashboard's KV-override without a restart.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_RATE_LIMIT_PER_MIN` | `10` | Maximum outbound WhatsApp messages per minute |
+| `PIMYWA_RATE_LIMIT_PER_DAY` | `500` | Maximum outbound WhatsApp messages per day |
+
+### Session Backup
+
+Encrypted backups of the WhatsApp session SQLite file. Backups are disabled by default until `PIMYWA_BACKUP_KEY` is set.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_BACKUP_KEY` | `""` | Passphrase to derive the backup encryption key (scrypt). Empty = backups disabled. |
+| `PIMYWA_BACKUP_DIR` | `/opt/pimywa/data/backups` | Directory where encrypted session backups are written |
+| `PIMYWA_BACKUP_KEEP` | `5` | Number of newest backups to retain; older ones are deleted on rotation |
+| `PIMYWA_BACKUP_INTERVAL` | `24h` | How often the periodic backup ticker runs |
+
+<Note>
+  The default `PIMYWA_BACKUP_DIR` is on the same SD card as the session it backs up — this protects against database corruption, not against SD card failure. For disaster recovery, set `PIMYWA_BACKUP_DIR` to a path on an external or network-mounted volume.
+</Note>
+
+### MCP Anti-Flood
+
+A limiter on MCP-inbound tool calls, distinct from the WhatsApp send rate limits. These protect the switchboard from a buggy or runaway AI agent hammering the MCP server. Applied per MCP client session ID, dashboard-editable via KV-override.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_MCPGUARD_RATE_PER_MIN` | `120` | General tool call rate limit per MCP client, per minute |
+| `PIMYWA_MCPGUARD_EMIT_RATE_PER_MIN` | `20` | Stricter rate limit for `send_message` / `escalate` (tools with real-world side effects) |
+| `PIMYWA_MCPGUARD_BLOCK_THRESHOLD` | `5` | Consecutive throttled calls that trip the circuit breaker and fully block the client |
+| `PIMYWA_MCPGUARD_BLOCK_COOLDOWN` | `5m` | How long a tripped client remains fully blocked before the circuit breaker resets |
+
+### Auto-Reply Bridge
+
+The bridge plugin selects how the auto-reply worker generates draft replies for chats in `auto` mode. Disabled by default.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIMYWA_BRIDGE` | `none` | Bridge backend. `"direct-api"` to enable the DeepSeek auto-reply bridge; `"none"` to disable. |
+| `PIMYWA_DEEPSEEK_KEY` | `""` | DeepSeek API key. Secret — never logged or exposed via MCP. |
+| `PIMYWA_DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek model name to use for draft generation |
+
+<Tip>
+  See [reference/env-vars](/reference/env-vars) for the complete variable reference, including display adapter, power adapter, battery telemetry, and dashboard configuration variables.
+</Tip>
